@@ -78,7 +78,7 @@ namespace DevSnippetManager.ViewModels
             if (dialog.ShowDialog() != true || dialog.FileNames.Length == 0)
                 return;
 
-            await RunScanAsync(ct => _scanService.ScanPathsAsync(dialog.FileNames, CreateProgress(), ct));
+            await RunScanAsync((progress, ct) => _scanService.ScanPathsAsync(dialog.FileNames, progress, ct));
         }
 
         [RelayCommand(CanExecute = nameof(CanStartScan))]
@@ -92,7 +92,7 @@ namespace DevSnippetManager.ViewModels
             if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.FolderName))
                 return;
 
-            await RunScanAsync(ct => _scanService.ScanPathsAsync(new[] { dialog.FolderName }, CreateProgress(), ct));
+            await RunScanAsync((progress, ct) => _scanService.ScanPathsAsync(new[] { dialog.FolderName }, progress, ct));
         }
 
         [RelayCommand(CanExecute = nameof(CanStartScan))]
@@ -103,6 +103,7 @@ namespace DevSnippetManager.ViewModels
 
             if (!Directory.Exists(project.Root))
             {
+                RefreshProjects(_main.AllSnippets);
                 System.Windows.MessageBox.Show(
                     $"Proje klasörü bulunamadı: {project.Root}\n\"Konumu değiştir…\" ile yeni klasörü seçebilirsiniz.",
                     "Uyarı",
@@ -111,7 +112,7 @@ namespace DevSnippetManager.ViewModels
                 return;
             }
 
-            await RunScanAsync(async ct => new[] { await _scanService.RescanProjectAsync(project.Root, CreateProgress(), ct) });
+            await RunScanAsync(async (progress, ct) => new[] { await _scanService.RescanProjectAsync(project.Root, progress, ct) });
         }
 
         [RelayCommand(CanExecute = nameof(CanStartScan))]
@@ -168,9 +169,10 @@ namespace DevSnippetManager.ViewModels
             });
         }
 
-        private async Task RunScanAsync(Func<CancellationToken, Task<IReadOnlyList<ScanSummary>>> work)
+        private async Task RunScanAsync(Func<IProgress<ScanProgress>, CancellationToken, Task<IReadOnlyList<ScanSummary>>> work)
         {
-            var hadUnsaved = _main.HasUnsavedChanges;
+            var hadUnsavedAtStart = _main.HasUnsavedChanges;
+            var progress = CreateProgress();
             _scanCts = new CancellationTokenSource();
             IsScanning = true;
             ScanProgressValue = 0;
@@ -178,7 +180,9 @@ namespace DevSnippetManager.ViewModels
 
             try
             {
-                var summaries = await work(_scanCts.Token);
+                var token = _scanCts.Token;
+                var summaries = await Task.Run(() => work(progress, token), token);
+                var hadUnsaved = hadUnsavedAtStart || _main.HasUnsavedChanges;
                 await _main.RefreshAfterScanAsync(hadUnsaved);
 
                 if (summaries.Count == 0)

@@ -204,4 +204,96 @@ public class ProjectScanServiceTests : IDisposable
         var all = (await repo.GetAllAsync()).ToList();
         Assert.Contains(all, s => s.SourceSymbol.Contains("MainViewModel.SaveSnippetAsync", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task ScanPaths_FolderMarksDeletedFilesMissing()
+    {
+        var projDir = Path.Combine(_tempDir, "DeletedFileProj");
+        Directory.CreateDirectory(projDir);
+        var keepFile = Path.Combine(projDir, "Keep.cs");
+        var goneFile = Path.Combine(projDir, "Gone.cs");
+        await File.WriteAllTextAsync(keepFile, "public class Keep { public int A()\n{\n    return 1;\n} }");
+        await File.WriteAllTextAsync(goneFile, "public class Gone { public int B()\n{\n    return 2;\n} }");
+
+        var (repo, service) = await CreateServiceAsync("deleted-folder.db");
+        var first = await service.ScanPathsAsync(new[] { projDir });
+        Assert.Equal(2, Assert.Single(first).Result.Added);
+
+        File.Delete(goneFile);
+        var second = await service.ScanPathsAsync(new[] { projDir });
+        var summary = Assert.Single(second);
+        Assert.Equal(1, summary.Result.MarkedMissing);
+        Assert.Equal(1, summary.Result.Unchanged);
+
+        var all = (await repo.GetAllAsync()).ToList();
+        Assert.False(all.Single(s => s.SourceFile == "Keep.cs").IsSourceMissing);
+        Assert.True(all.Single(s => s.SourceFile == "Gone.cs").IsSourceMissing);
+    }
+
+    [Fact]
+    public async Task ApplyScan_PureRelinkDoesNotBumpUpdatedAtAndBulkTouchWorks()
+    {
+        var projDir = Path.Combine(_tempDir, "RelinkDbProj");
+        Directory.CreateDirectory(projDir);
+        var fileA = Path.Combine(projDir, "A.cs");
+        await File.WriteAllTextAsync(fileA, """
+            public class A
+            {
+                public int Stay()
+                {
+                    return 10;
+                }
+                public int OldName(int x)
+                {
+                    var y = x * 2;
+                    return y;
+                }
+            }
+            """);
+
+        var (repo, service) = await CreateServiceAsync("relink-db.db");
+        await service.ScanPathsAsync(new[] { projDir });
+        var before = (await repo.GetAllAsync()).ToDictionary(s => s.SourceSymbol);
+        var oldUpdatedAt = before["A.OldName(int)"].UpdatedAt;
+        var stayOldScan = before["A.Stay()"].LastScannedAt;
+
+        await Task.Delay(25);
+        await File.WriteAllTextAsync(fileA, """
+            public class A
+            {
+                public int Stay()
+                {
+                    return 10;
+                }
+                public int NewName(int x)
+                {
+                    var y = x * 2;
+                    return y;
+                }
+            }
+            """);
+
+        var summary = await service.RescanProjectAsync(projDir);
+        Assert.Equal(1, summary.Result.Relinked);
+        Assert.Equal(1, summary.Result.Unchanged);
+
+        var after = (await repo.GetAllAsync()).ToDictionary(s => s.SourceSymbol);
+        Assert.True(after.ContainsKey("A.NewName(int)"));
+        Assert.Equal(oldUpdatedAt, after["A.NewName(int)"].UpdatedAt);
+        Assert.True(after["A.Stay()"].LastScannedAt > stayOldScan);
+    }
+
+    [Theory]
+    [InlineData("MainViewModel.cs", true)]
+    [InlineData("app.js", true)]
+    [InlineData("schema.sql", true)]
+    [InlineData("inventory.py", true)]
+    [InlineData("proje-tarama", false)]
+    [InlineData("metot", false)]
+    [InlineData("v1.0", false)]
+    [InlineData("", false)]
+    public void IsSourceFileTag_ExcludesKnownSourceFileTagsFromCloud(string tag, bool expected)
+    {
+        Assert.Equal(expected, DevSnippetManager.ViewModels.MainViewModel.IsSourceFileTag(tag));
+    }
 }

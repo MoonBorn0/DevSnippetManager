@@ -164,13 +164,21 @@ public class ScanReconcilerTests
     }
 
     [Fact]
-    public void Reconcile_RenamedWithSameCodeRelinked()
+    public void Reconcile_RenamedWithSameCodeRelinked_CSharp()
     {
-        var existing = MakeExisting(1, "Old.cs", "A.OldName()", "public void X()\n{\n    Do();\n}", comment: "c", description: "Benim açıklamam");
+        var existing = MakeExisting(
+            1,
+            "Old.cs",
+            "Demo.A.Foo(int)",
+            "public void Foo(int x)\n{\n    var y = x + 1;\n    Do(y);\n}",
+            comment: "c",
+            description: "Benim açıklamam");
+        existing.Tags = "proje-tarama, metot, Old.cs";
+
         var fileOld = new ScannedFile("Old.cs", "C#", new ExtractionResult(Array.Empty<ExtractedBlock>(), false), true);
         var fileNew = new ScannedFile("New.cs", "C#", new ExtractionResult(new[]
         {
-            MakeBlock("A.NewName()", "A.NewName", "public void X()\n{\n    Do();\n}")
+            MakeBlock("Demo.A.Bar(int)", "A.Bar", "public void Bar(int x)\n{\n    var y = x + 1;\n    Do(y);\n}")
         }, false), true);
 
         var plan = ScanReconciler.Reconcile(Root, Folder, new[] { fileOld, fileNew }, new[] { existing }, Now);
@@ -181,8 +189,62 @@ public class ScanReconcilerTests
         var upd = Assert.Single(plan.ToUpdate);
         Assert.Equal(1, upd.Id);
         Assert.Equal("New.cs", upd.SourceFile);
-        Assert.Equal("A.NewName()", upd.SourceSymbol);
+        Assert.Equal("Demo.A.Bar(int)", upd.SourceSymbol);
         Assert.Equal("Benim açıklamam", upd.Description);
+        Assert.Equal(existing.UpdatedAt, upd.UpdatedAt);
+        Assert.Equal("proje-tarama, metot, New.cs", upd.Tags);
+        Assert.Contains(1, plan.RelinkedIds);
+    }
+
+    [Fact]
+    public void Reconcile_RenamedWithSameCodeRelinked_Python()
+    {
+        var existing = MakeExisting(
+            2,
+            "utils.py",
+            "calc_old",
+            "def calc_old(a, b):\n    total = a + b\n    return total * 2",
+            comment: "toplam",
+            description: "toplam");
+        existing.Language = "Python";
+        existing.Tags = "proje-tarama, fonksiyon, utils.py";
+
+        var file = new ScannedFile("utils.py", "Python", new ExtractionResult(new[]
+        {
+            MakeBlock("calc_new", "calc_new", "def calc_new(a, b):\n    total = a + b\n    return total * 2", "toplam", BlockKind.Function)
+        }, false), true);
+
+        var plan = ScanReconciler.Reconcile(Root, Folder, new[] { file }, new[] { existing }, Now);
+
+        Assert.Equal(1, plan.Relinked);
+        Assert.Empty(plan.ToInsert);
+        Assert.Empty(plan.MarkMissing);
+        var upd = Assert.Single(plan.ToUpdate);
+        Assert.Equal("calc_new", upd.SourceSymbol);
+        Assert.Equal(existing.UpdatedAt, upd.UpdatedAt);
+    }
+
+    [Fact]
+    public void Reconcile_RelinkDoesNotReAddRemovedFileTag()
+    {
+        var existing = MakeExisting(
+            3,
+            "Old.cs",
+            "A.Foo()",
+            "public void Foo()\n{\n    Do();\n}");
+        existing.Tags = "proje-tarama, metot, benim-etiketim";
+
+        var fileOld = new ScannedFile("Old.cs", "C#", new ExtractionResult(Array.Empty<ExtractedBlock>(), false), true);
+        var fileNew = new ScannedFile("New.cs", "C#", new ExtractionResult(new[]
+        {
+            MakeBlock("A.Bar()", "A.Bar", "public void Bar()\n{\n    Do();\n}")
+        }, false), true);
+
+        var plan = ScanReconciler.Reconcile(Root, Folder, new[] { fileOld, fileNew }, new[] { existing }, Now);
+
+        Assert.Equal(1, plan.Relinked);
+        var upd = Assert.Single(plan.ToUpdate);
+        Assert.Equal("proje-tarama, metot, benim-etiketim", upd.Tags);
     }
 
     [Fact]

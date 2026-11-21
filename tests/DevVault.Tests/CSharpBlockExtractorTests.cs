@@ -44,6 +44,7 @@ public class CSharpBlockExtractorTests
 
         var ctor = Assert.Single(result.Blocks, b => b.Kind == BlockKind.Constructor);
         Assert.Equal("Shop.Orders.OrderService..ctor(decimal)", ctor.Symbol);
+        Assert.Equal("OrderService (kurucu)", ctor.DisplayName);
 
         var prop = Assert.Single(result.Blocks, b => b.Kind == BlockKind.Property);
         Assert.Equal("Shop.Orders.OrderService.Tax", prop.Symbol);
@@ -302,5 +303,26 @@ public class CSharpBlockExtractorTests
         var block = Assert.Single(result.Blocks);
         Assert.Equal("Tricky.Format(int)", block.Symbol);
         Assert.Contains("return s1 + s2;", block.Code);
+    }
+
+    [Fact]
+    public void Extract_XmlDocPreservesSeeCref()
+    {
+        const string code = """
+            public class Runner
+            {
+                /// <summary>
+                /// <see cref="OrderService"/> ile <see cref="T:Shop.Item"/> işler.
+                /// </summary>
+                public void Run()
+                {
+                    var x = 1;
+                }
+            }
+            """;
+
+        var result = _extractor.Extract(code, "C#");
+        var block = Assert.Single(result.Blocks);
+        Assert.Equal("OrderService ile Shop.Item işler.", block.Comment);
     }
 }

@@ -114,9 +114,10 @@ public sealed class ProjectScanService
         ArgumentNullException.ThrowIfNull(paths);
         ct.ThrowIfCancellationRequested();
 
-        var filesByRoot = await Task.Run(() =>
+        var (filesByRoot, scannedFolderRoots) = await Task.Run(() =>
         {
             var grouped = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var folderRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var rawPath in paths)
             {
@@ -127,6 +128,7 @@ public sealed class ProjectScanService
                 if (Directory.Exists(rawPath))
                 {
                     var root = ProjectLocator.NormalizePath(rawPath);
+                    folderRoots.Add(root);
                     var enumerated = ProjectLocator.EnumerateSourceFiles(root);
                     if (!grouped.TryGetValue(root, out var set))
                     {
@@ -152,7 +154,7 @@ public sealed class ProjectScanService
                 }
             }
 
-            return grouped;
+            return (grouped, folderRoots);
         }, ct);
 
         if (filesByRoot.Count == 0)
@@ -193,6 +195,27 @@ public sealed class ProjectScanService
                     scannedFiles.Add(ScanSingleFile(fullFile, relPath));
                     doneFiles++;
                     progress?.Report(new ScanProgress(doneFiles, totalFiles, relPath));
+                }
+
+                // For scanned folders, also mark previously known SourceFiles that no longer exist on disk
+                if (scannedFolderRoots.Contains(root))
+                {
+                    var knownRelPaths = allSnippets
+                        .Where(s => s.IsFromSource && !string.IsNullOrWhiteSpace(s.SourceRoot) &&
+                                    ProjectLocator.PathEquals(s.SourceRoot, root) &&
+                                    !string.IsNullOrWhiteSpace(s.SourceFile))
+                        .Select(s => s.SourceFile)
+                        .Distinct(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var knownRel in knownRelPaths)
+                    {
+                        var fullKnown = ProjectLocator.NormalizePath(Path.Combine(root, knownRel));
+                        if (!fileSet.Contains(fullKnown) && !File.Exists(fullKnown))
+                        {
+                            var lang = ProjectLocator.LanguageFromPath(fullKnown) ?? "Diğer";
+                            scannedFiles.Add(new ScannedFile(knownRel, lang, null, Exists: false));
+                        }
+                    }
                 }
 
                 result.Add((root, folder, scannedFiles));

@@ -229,9 +229,17 @@ CREATE INDEX IF NOT EXISTS ""IX_SnippetVersions_SnippetId_SavedAt"" ON ""Snippet
                     if (existing == null || dbBefore == null)
                         continue;
 
-                    await SnapshotVersionIfContentChangedAsync(dbBefore, updated);
-                    if (HasContentChanged(dbBefore, updated))
-                        updated.UpdatedAt = now;
+                    var isPureRelink = plan.RelinkedIds.Contains(updated.Id);
+                    if (!isPureRelink)
+                    {
+                        await SnapshotVersionIfContentChangedAsync(dbBefore, updated);
+                        if (HasContentChanged(dbBefore, updated))
+                            updated.UpdatedAt = now;
+                    }
+                    else
+                    {
+                        updated.UpdatedAt = dbBefore.UpdatedAt;
+                    }
 
                     _context.Entry(existing).CurrentValues.SetValues(updated);
                     updatedIds.Add(updated.Id);
@@ -253,16 +261,22 @@ CREATE INDEX IF NOT EXISTS ""IX_SnippetVersions_SnippetId_SavedAt"" ON ""Snippet
                         existing.IsSourceMissing = false;
                 }
 
-                foreach (var id in plan.Touch)
+                await _context.SaveChangesAsync();
+
+                var touchIds = plan.Touch
+                    .Where(id => !updatedIds.Contains(id))
+                    .Distinct()
+                    .ToList();
+
+                foreach (var chunk in touchIds.Chunk(500))
                 {
-                    if (updatedIds.Contains(id)) continue;
-                    var existing = await _context.Snippets.FindAsync(id);
-                    if (existing != null)
-                        existing.LastScannedAt = now;
+                    await _context.Snippets
+                        .Where(s => chunk.Contains(s.Id))
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.LastScannedAt, now));
                 }
 
-                await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+                _context.ChangeTracker.Clear();
 
                 return new ScanApplyResult(
                     plan.ToInsert.Count,
@@ -395,6 +409,7 @@ CREATE INDEX IF NOT EXISTS ""IX_SnippetVersions_SnippetId_SavedAt"" ON ""Snippet
                 await _context.Snippets.AddRangeAsync(snippets);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+                _context.ChangeTracker.Clear();
             }
             catch
             {

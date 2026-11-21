@@ -106,8 +106,8 @@ public sealed class CSharpBlockExtractor : IBlockExtractor
                         continue;
                     hasExtractableChild = true;
                     var ctorParams = FormatParameters(ctor.ParameterList);
-                    var ctorDisplay = $"{currentTypeChain}..ctor";
-                    var ctorSymbolBase = Combine(nsPrefix, $"{ctorDisplay}({ctorParams})");
+                    var ctorDisplay = $"{currentTypeChain} (kurucu)";
+                    var ctorSymbolBase = Combine(nsPrefix, $"{currentTypeChain}..ctor({ctorParams})");
                     AddBlockWithSymbol(ctor, ctorSymbolBase, ctorDisplay, BlockKind.Constructor, source, tree, blocks, symbolCounts);
                     break;
 
@@ -331,19 +331,19 @@ public sealed class CSharpBlockExtractor : IBlockExtractor
             var doc = XElement.Parse($"<root>{xmlBody}</root>");
             var parts = new List<string>();
 
-            var summary = NormalizeXmlText(doc.Element("summary")?.Value);
+            var summary = ExtractXmlElementText(doc.Element("summary"));
             if (summary.Length > 0)
                 parts.Add(summary);
 
             foreach (var param in doc.Elements("param"))
             {
                 var name = param.Attribute("name")?.Value?.Trim();
-                var text = NormalizeXmlText(param.Value);
+                var text = ExtractXmlElementText(param);
                 if (!string.IsNullOrEmpty(name) && text.Length > 0)
                     parts.Add($"- {name}: {text}");
             }
 
-            var returns = NormalizeXmlText(doc.Element("returns")?.Value);
+            var returns = ExtractXmlElementText(doc.Element("returns"));
             if (returns.Length > 0)
                 parts.Add($"Döndürür: {returns}");
 
@@ -352,6 +352,60 @@ public sealed class CSharpBlockExtractor : IBlockExtractor
         catch
         {
             return string.Empty;
+        }
+    }
+
+    private static string ExtractXmlElementText(XElement? element)
+    {
+        if (element == null)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        AppendXmlNodeText(element, sb);
+        return NormalizeXmlText(sb.ToString());
+    }
+
+    private static void AppendXmlNodeText(XNode node, StringBuilder sb)
+    {
+        switch (node)
+        {
+            case XText text:
+                sb.Append(text.Value);
+                break;
+
+            case XElement el:
+                var localName = el.Name.LocalName;
+                if (string.Equals(localName, "see", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(localName, "seealso", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrWhiteSpace(el.Value))
+                    {
+                        sb.Append(el.Value);
+                    }
+                    else
+                    {
+                        var cref = el.Attribute("cref")?.Value?.Trim();
+                        if (!string.IsNullOrEmpty(cref))
+                        {
+                            if (cref.Length > 2 && cref[1] == ':' && char.IsLetter(cref[0]))
+                                cref = cref[2..];
+                            sb.Append(cref);
+                        }
+                    }
+                }
+                else if (string.Equals(localName, "paramref", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(localName, "typeparamref", StringComparison.OrdinalIgnoreCase))
+                {
+                    var name = el.Attribute("name")?.Value?.Trim();
+                    if (!string.IsNullOrEmpty(name))
+                        sb.Append(name);
+                }
+                else
+                {
+                    foreach (var child in el.Nodes())
+                        AppendXmlNodeText(child, sb);
+                }
+                break;
         }
     }
 

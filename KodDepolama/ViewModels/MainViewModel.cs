@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DevSnippetManager.Data;
 using DevSnippetManager.Services;
+using DevSnippetManager.Services.ProjectScan;
 using DevSnippetManager.Views;
 using KodDepolama;
 using MaterialDesignThemes.Wpf;
@@ -383,11 +384,12 @@ namespace DevSnippetManager.ViewModels
             var folders = _allSnippets.Select(s => s.Folder?.Trim() ?? string.Empty)
                 .Where(f => f.Length > 0).Distinct(StringComparer.Ordinal).OrderBy(f => f, StringComparer.Create(_turkish, true)).ToList();
             EditFolders = new ObservableCollection<string>(folders);
-            FolderFilters = new ObservableCollection<string>(new[] { "Tüm klasörler", "Klasörsüz", "Kaynakta olmayanlar" }.Concat(folders));
+            FolderFilters = new ObservableCollection<string>(new[] { "Tüm klasörler", "Klasörsüz", "Kaynakta yok" }.Concat(folders));
             SelectedFolderFilter = FolderFilters.Contains(selectedFolder) ? selectedFolder : "Tüm klasörler";
             ProjectScan.RefreshProjects(_allSnippets);
 
             var tagGroups = _allSnippets.SelectMany(s => GetTags(s.Tags)
+                    .Where(t => !IsSourceFileTag(t))
                     .Distinct(StringComparer.Create(_turkish, true)))
                 .GroupBy(t => t, StringComparer.Create(_turkish, true));
             var newTagFilters = tagGroups.Select(group => new TagFilterItem(
@@ -408,6 +410,16 @@ namespace DevSnippetManager.ViewModels
         {
             return (tags ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries)
                 .Select(tag => tag.Trim()).Where(tag => tag.Length > 0);
+        }
+
+        public static bool IsSourceFileTag(string? tag)
+        {
+            if (string.IsNullOrWhiteSpace(tag))
+                return false;
+
+            var trimmed = tag.Trim();
+            return trimmed.Contains('.', StringComparison.Ordinal)
+                && ProjectLocator.LanguageFromPath(trimmed) != null;
         }
 
         private void TagFilterItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -551,9 +563,9 @@ namespace DevSnippetManager.ViewModels
 
             if (SelectedFolderFilter == "Klasörsüz")
                 query = query.Where(s => string.IsNullOrWhiteSpace(s.Folder));
-            else if (SelectedFolderFilter == "Kaynakta olmayanlar")
+            else if (SelectedFolderFilter == "Kaynakta yok")
                 query = query.Where(s => s.IsSourceMissing);
-            else if (SelectedFolderFilter != "Tüm klasörler")
+            else if (!string.IsNullOrEmpty(SelectedFolderFilter) && SelectedFolderFilter != "Tüm klasörler")
                 query = query.Where(s => string.Equals(s.Folder, SelectedFolderFilter, StringComparison.Ordinal));
 
             var selectedTags = TagFilters.Where(t => t.IsSelected).Select(t => t.Name).ToList();
@@ -635,7 +647,10 @@ namespace DevSnippetManager.ViewModels
                     ClearEditor();
                 }
                 _newSnippetPrefilledFolder = null;
-                if (SelectedFolderFilter != "Tüm klasörler" && SelectedFolderFilter != "Klasörsüz")
+                if (!string.IsNullOrEmpty(SelectedFolderFilter)
+                    && SelectedFolderFilter != "Tüm klasörler"
+                    && SelectedFolderFilter != "Klasörsüz"
+                    && SelectedFolderFilter != "Kaynakta yok")
                 {
                     EditFolder = SelectedFolderFilter;
                     _newSnippetPrefilledFolder = EditFolder;
@@ -745,6 +760,7 @@ namespace DevSnippetManager.ViewModels
         {
             var openId = _editingSnippet?.Id ?? SelectedSnippet?.Id;
             var oldUpdatedAt = _editingSnippet?.UpdatedAt;
+            var hasUnsaved = openSnippetModifiedBeforeScan || HasUnsavedChanges;
 
             var previousSuppress = _suppressUnsavedCheck;
             _suppressUnsavedCheck = true;
@@ -757,7 +773,7 @@ namespace DevSnippetManager.ViewModels
                     if (refreshed != null)
                     {
                         var changedByScan = oldUpdatedAt.HasValue && refreshed.UpdatedAt != oldUpdatedAt.Value;
-                        if (changedByScan && openSnippetModifiedBeforeScan)
+                        if (changedByScan && hasUnsaved)
                         {
                             MessageQueue.Enqueue("Açık snippet kaynakta değişti; kaydederseniz tarama sonucu sürüm geçmişine düşer");
                         }

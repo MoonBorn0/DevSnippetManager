@@ -661,7 +661,7 @@ namespace KodDepolama
                         CommandParameter = proj
                     });
 
-                    if (!proj.RootExists)
+                    if (!System.IO.Directory.Exists(proj.Root))
                     {
                         projItem.Items.Add(new System.Windows.Controls.MenuItem
                         {
