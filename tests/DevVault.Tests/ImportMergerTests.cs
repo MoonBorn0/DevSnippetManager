@@ -136,4 +136,79 @@ public class ImportMergerTests
         Assert.Equal(0, item.UsageCount);
         Assert.Null(item.LastUsedAt);
     }
+
+    [Fact]
+    public void Merge_SourceSnippetsMatchBySourceIdentityNotTitle()
+    {
+        var existing = new List<Snippet>
+        {
+            new() { Id = 1, Title = "User Custom Title", Language = "C#", Folder = "Proj", SourceRoot = @"C:\Local\Proj", SourceFile = @"Services\A.cs", SourceSymbol = "Proj.A.Run()", Code = "v1" }
+        };
+        var incoming = new List<Snippet>
+        {
+            new() { Id = 9, Title = "A.Run", Language = "C#", Folder = "Proj", SourceRoot = @"D:\OtherPC\Proj", SourceFile = @"Services/A.cs", SourceSymbol = "Proj.A.Run()", Code = "v2" }
+        };
+
+        var plan = ImportMerger.Plan(existing, incoming, ImportMode.Merge);
+
+        Assert.Empty(plan.ToAdd);
+        var upd = Assert.Single(plan.ToUpdate);
+        Assert.Equal(1, upd.Id);
+        Assert.Equal("v2", upd.Code);
+    }
+
+    [Fact]
+    public void Merge_SameTitleDifferentFilesNotDuplicates()
+    {
+        var existing = new List<Snippet>
+        {
+            new() { Id = 1, Title = "Run", Language = "C#", Folder = "Proj", SourceFile = "A.cs", SourceSymbol = "A.Run()", Code = "c1" }
+        };
+        var incoming = new List<Snippet>
+        {
+            new() { Id = 2, Title = "Run", Language = "C#", Folder = "Proj", SourceFile = "B.cs", SourceSymbol = "B.Run()", Code = "c2" }
+        };
+
+        var plan = ImportMerger.Plan(existing, incoming, ImportMode.Merge);
+
+        Assert.Single(plan.ToAdd);
+        Assert.Empty(plan.ToUpdate);
+        Assert.Empty(plan.Skipped);
+    }
+
+    [Fact]
+    public void Merge_SourceAndManualNeverMatch()
+    {
+        var existing = new List<Snippet>
+        {
+            new() { Id = 1, Title = "Helper", Language = "C#", Folder = "Proj", Code = "manual" }
+        };
+        var incoming = new List<Snippet>
+        {
+            new() { Id = 2, Title = "Helper", Language = "C#", Folder = "Proj", SourceFile = "H.cs", SourceSymbol = "Helper()", Code = "scanned" }
+        };
+
+        var plan = ImportMerger.Plan(existing, incoming, ImportMode.Merge);
+
+        Assert.Single(plan.ToAdd);
+        Assert.Empty(plan.ToUpdate);
+    }
+
+    [Fact]
+    public void Merge_KeepsLocalSourceRoot()
+    {
+        var existing = new List<Snippet>
+        {
+            new() { Id = 1, Title = "A.Run", Language = "C#", Folder = "Proj", SourceRoot = @"C:\MyMachine\Proj", SourceFile = "A.cs", SourceSymbol = "A.Run()", Code = "v1" }
+        };
+        var incoming = new List<Snippet>
+        {
+            new() { Id = 5, Title = "A.Run", Language = "C#", Folder = "Proj", SourceRoot = @"E:\OtherMachine\Proj", SourceFile = "A.cs", SourceSymbol = "A.Run()", Code = "v2" }
+        };
+
+        var plan = ImportMerger.Plan(existing, incoming, ImportMode.Merge);
+
+        var upd = Assert.Single(plan.ToUpdate);
+        Assert.Equal(@"C:\MyMachine\Proj", upd.SourceRoot);
+    }
 }

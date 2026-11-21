@@ -399,4 +399,130 @@ public class SnippetRepositoryTests : IDisposable
         Assert.Equal(scannedAt, fromJson.LastScannedAt);
         Assert.True(fromJson.IsFromSource);
     }
+
+    [Fact]
+    public async Task ApplyScan_InsertsUpdatesAndMarks()
+    {
+        var repo = CreateRepository("apply_scan.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var existing1 = new Snippet { Title = "M1", Language = "C#", Code = "v1", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" };
+        var existing2 = new Snippet { Title = "M2", Language = "C#", Code = "v1", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M2()" };
+        await repo.AddOrUpdateAsync(existing1);
+        await repo.AddOrUpdateAsync(existing2);
+
+        var now = new DateTime(2026, 11, 21, 23, 55, 0);
+        var plan = new DevSnippetManager.Services.ProjectScan.ScanPlan { ScannedAt = now };
+        plan.ToInsert.Add(new Snippet { Title = "M3", Language = "C#", Code = "new", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M3()" });
+        plan.ToUpdate.Add(new Snippet { Id = existing1.Id, Title = "M1", Language = "C#", Code = "v2", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()", LastScannedAt = now, UpdatedAt = now });
+        plan.MarkMissing.Add(existing2.Id);
+
+        var res = await repo.ApplyScanAsync(plan);
+        Assert.Equal(1, res.Added);
+        Assert.Equal(1, res.Updated);
+        Assert.Equal(1, res.MarkedMissing);
+
+        var all = (await repo.GetAllAsync()).ToList();
+        Assert.Equal(3, all.Count);
+        Assert.Equal("v2", all.Single(s => s.Id == existing1.Id).Code);
+        Assert.True(all.Single(s => s.Id == existing2.Id).IsSourceMissing);
+    }
+
+    [Fact]
+    public async Task ApplyScan_UpdateCreatesVersionWithOldCode()
+    {
+        var repo = CreateRepository("apply_scan_version.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var existing = new Snippet { Title = "M1", Language = "C#", Code = "old-code", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" };
+        await repo.AddOrUpdateAsync(existing);
+
+        var plan = new DevSnippetManager.Services.ProjectScan.ScanPlan { ScannedAt = DateTime.Now };
+        plan.ToUpdate.Add(new Snippet { Id = existing.Id, Title = "M1", Language = "C#", Code = "new-code", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" });
+        await repo.ApplyScanAsync(plan);
+
+        var versions = await repo.GetVersionsAsync(existing.Id);
+        var v = Assert.Single(versions);
+        Assert.Equal("old-code", v.Code);
+    }
+
+    [Fact]
+    public async Task ApplyScan_RescanCreatesNoVersions()
+    {
+        var repo = CreateRepository("apply_scan_rescan.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var existing = new Snippet { Title = "M1", Language = "C#", Code = "same", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" };
+        await repo.AddOrUpdateAsync(existing);
+
+        var plan = new DevSnippetManager.Services.ProjectScan.ScanPlan { ScannedAt = DateTime.Now, Unchanged = 1 };
+        plan.Touch.Add(existing.Id);
+        await repo.ApplyScanAsync(plan);
+
+        Assert.Empty(await repo.GetVersionsAsync(existing.Id));
+    }
+
+    [Fact]
+    public async Task ApplyScan_MissingFlagCreatesNoVersion()
+    {
+        var repo = CreateRepository("apply_scan_missing.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var existing = new Snippet { Title = "M1", Language = "C#", Code = "c1", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" };
+        await repo.AddOrUpdateAsync(existing);
+
+        var plan = new DevSnippetManager.Services.ProjectScan.ScanPlan { ScannedAt = DateTime.Now };
+        plan.MarkMissing.Add(existing.Id);
+        await repo.ApplyScanAsync(plan);
+
+        Assert.Empty(await repo.GetVersionsAsync(existing.Id));
+        var loaded = Assert.Single(await repo.GetAllAsync());
+        Assert.True(loaded.IsSourceMissing);
+    }
+
+    [Fact]
+    public async Task ApplyScan_FailureRollsBackEverything()
+    {
+        var repo = CreateRepository("apply_scan_rollback.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var existing = new Snippet { Title = "M1", Language = "C#", Code = "orig", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" };
+        await repo.AddOrUpdateAsync(existing);
+
+        var plan = new DevSnippetManager.Services.ProjectScan.ScanPlan { ScannedAt = DateTime.Now };
+        plan.ToUpdate.Add(new Snippet { Id = existing.Id, Title = "M1", Language = "C#", Code = "modified", Folder = "P", SourceRoot = @"C:\P", SourceFile = "A.cs", SourceSymbol = "A.M1()" });
+        plan.ToInsert.Add(new Snippet { Title = null!, Language = "C#", Code = "invalid" });
+
+        await Assert.ThrowsAnyAsync<Exception>(() => repo.ApplyScanAsync(plan));
+
+        var loaded = Assert.Single(await repo.GetAllAsync());
+        Assert.Equal("orig", loaded.Code);
+        Assert.Empty(await repo.GetVersionsAsync(existing.Id));
+    }
+
+    [Fact]
+    public async Task RelocateSourceRoot_ChangesOnlyMatchingRoot()
+    {
+        var repo = CreateRepository("relocate.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var s1 = new Snippet { Title = "A", Language = "C#", Code = "a", SourceRoot = @"C:\Old\Proj", SourceFile = "A.cs", SourceSymbol = "A()" };
+        var s2 = new Snippet { Title = "B", Language = "C#", Code = "b", SourceRoot = @"C:\Other\Proj", SourceFile = "B.cs", SourceSymbol = "B()" };
+        await repo.AddOrUpdateAsync(s1);
+        await repo.AddOrUpdateAsync(s2);
+
+        var count = await repo.RelocateSourceRootAsync(@"c:\old\proj\", @"D:\Moved\Proj");
+        Assert.Equal(1, count);
+
+        var all = (await repo.GetAllAsync()).ToList();
+        Assert.Equal(@"D:\Moved\Proj", all.Single(s => s.Id == s1.Id).SourceRoot);
+        Assert.Equal(@"C:\Other\Proj", all.Single(s => s.Id == s2.Id).SourceRoot);
+        Assert.Empty(await repo.GetVersionsAsync(s1.Id));
+    }
 }

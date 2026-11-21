@@ -1,3 +1,4 @@
+using DevSnippetManager.Services.ProjectScan;
 using KodDepolama;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -155,31 +156,8 @@ CREATE INDEX IF NOT EXISTS ""IX_SnippetVersions_SnippetId_SavedAt"" ON ""Snippet
                 var existing = snippet.Id > 0 ? await _context.Snippets.FindAsync(snippet.Id) : null;
                 if (existing != null)
                 {
-                    if (dbBefore != null && HasContentChanged(dbBefore, snippet))
-                    {
-                        var version = new SnippetVersion
-                        {
-                            SnippetId = dbBefore.Id,
-                            Title = dbBefore.Title ?? string.Empty,
-                            Language = dbBefore.Language ?? string.Empty,
-                            Tags = dbBefore.Tags ?? string.Empty,
-                            Description = dbBefore.Description ?? string.Empty,
-                            Folder = dbBefore.Folder ?? string.Empty,
-                            Code = dbBefore.Code ?? string.Empty,
-                            SavedAt = dbBefore.UpdatedAt,
-                            CreatedAt = DateTime.Now
-                        };
-                        await _context.SnippetVersions.AddAsync(version);
-
-                        var overflow = await _context.SnippetVersions
-                            .Where(v => v.SnippetId == dbBefore.Id)
-                            .OrderByDescending(v => v.SavedAt)
-                            .ThenByDescending(v => v.Id)
-                            .Skip(MaxVersionsPerSnippet - 1)
-                            .ToListAsync();
-                        if (overflow.Count > 0)
-                            _context.SnippetVersions.RemoveRange(overflow);
-                    }
+                    if (dbBefore != null)
+                        await SnapshotVersionIfContentChangedAsync(dbBefore, snippet);
 
                     _context.Entry(existing).CurrentValues.SetValues(snippet);
                 }
@@ -190,6 +168,150 @@ CREATE INDEX IF NOT EXISTS ""IX_SnippetVersions_SnippetId_SavedAt"" ON ""Snippet
                 }
 
                 await _context.SaveChangesAsync();
+            }
+            catch
+            {
+                _context.ChangeTracker.Clear();
+                throw;
+            }
+        }
+
+        private async Task SnapshotVersionIfContentChangedAsync(Snippet dbBefore, Snippet incoming)
+        {
+            if (!HasContentChanged(dbBefore, incoming))
+                return;
+
+            var version = new SnippetVersion
+            {
+                SnippetId = dbBefore.Id,
+                Title = dbBefore.Title ?? string.Empty,
+                Language = dbBefore.Language ?? string.Empty,
+                Tags = dbBefore.Tags ?? string.Empty,
+                Description = dbBefore.Description ?? string.Empty,
+                Folder = dbBefore.Folder ?? string.Empty,
+                Code = dbBefore.Code ?? string.Empty,
+                SavedAt = dbBefore.UpdatedAt,
+                CreatedAt = DateTime.Now
+            };
+            await _context.SnippetVersions.AddAsync(version);
+
+            var overflow = await _context.SnippetVersions
+                .Where(v => v.SnippetId == dbBefore.Id)
+                .OrderByDescending(v => v.SavedAt)
+                .ThenByDescending(v => v.Id)
+                .Skip(MaxVersionsPerSnippet - 1)
+                .ToListAsync();
+            if (overflow.Count > 0)
+                _context.SnippetVersions.RemoveRange(overflow);
+        }
+
+        public async Task<ScanApplyResult> ApplyScanAsync(ScanPlan plan)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var updatedIds = new HashSet<int>();
+                var now = plan.ScannedAt == default ? DateTime.Now : plan.ScannedAt;
+
+                if (plan.ToInsert.Count > 0)
+                {
+                    foreach (var item in plan.ToInsert)
+                        item.Id = 0;
+                    await _context.Snippets.AddRangeAsync(plan.ToInsert);
+                }
+
+                foreach (var updated in plan.ToUpdate)
+                {
+                    var dbBefore = await _context.Snippets.AsNoTracking().FirstOrDefaultAsync(s => s.Id == updated.Id);
+                    var existing = await _context.Snippets.FindAsync(updated.Id);
+                    if (existing == null || dbBefore == null)
+                        continue;
+
+                    await SnapshotVersionIfContentChangedAsync(dbBefore, updated);
+                    if (HasContentChanged(dbBefore, updated))
+                        updated.UpdatedAt = now;
+
+                    _context.Entry(existing).CurrentValues.SetValues(updated);
+                    updatedIds.Add(updated.Id);
+                }
+
+                foreach (var id in plan.MarkMissing)
+                {
+                    if (updatedIds.Contains(id)) continue;
+                    var existing = await _context.Snippets.FindAsync(id);
+                    if (existing != null)
+                        existing.IsSourceMissing = true;
+                }
+
+                foreach (var id in plan.ClearMissing)
+                {
+                    if (updatedIds.Contains(id)) continue;
+                    var existing = await _context.Snippets.FindAsync(id);
+                    if (existing != null)
+                        existing.IsSourceMissing = false;
+                }
+
+                foreach (var id in plan.Touch)
+                {
+                    if (updatedIds.Contains(id)) continue;
+                    var existing = await _context.Snippets.FindAsync(id);
+                    if (existing != null)
+                        existing.LastScannedAt = now;
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return new ScanApplyResult(
+                    plan.ToInsert.Count,
+                    plan.ToUpdate.Count,
+                    plan.MarkMissing.Count,
+                    plan.ClearMissing.Count,
+                    plan.Unchanged,
+                    plan.Relinked);
+            }
+            catch
+            {
+                try
+                {
+                    await transaction.RollbackAsync();
+                }
+                catch
+                {
+                    // Preserve original error
+                }
+                _context.ChangeTracker.Clear();
+                throw;
+            }
+        }
+
+        public async Task<int> RelocateSourceRootAsync(string oldRoot, string newRoot)
+        {
+            var normalizedOld = ProjectLocator.NormalizePath(oldRoot);
+            var normalizedNew = ProjectLocator.NormalizePath(newRoot);
+
+            try
+            {
+                var candidates = await _context.Snippets
+                    .Where(s => s.SourceRoot != "")
+                    .ToListAsync();
+
+                var count = 0;
+                foreach (var snippet in candidates)
+                {
+                    if (ProjectLocator.PathEquals(snippet.SourceRoot, normalizedOld))
+                    {
+                        snippet.SourceRoot = normalizedNew;
+                        count++;
+                    }
+                }
+
+                if (count > 0)
+                    await _context.SaveChangesAsync();
+
+                return count;
             }
             catch
             {

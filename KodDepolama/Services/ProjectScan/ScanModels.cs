@@ -66,6 +66,14 @@ public sealed record ScannedFile(
     ExtractionResult? Result,
     bool Exists);
 
+public sealed record ScanApplyResult(
+    int Added,
+    int Updated,
+    int MarkedMissing,
+    int Restored,
+    int Unchanged,
+    int Relinked);
+
 public static class CodeNormalizer
 {
     public static string Dedent(string code)
