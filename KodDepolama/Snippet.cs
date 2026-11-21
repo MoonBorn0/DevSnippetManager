@@ -1,3 +1,5 @@
+using System;
+
 namespace KodDepolama
 {
     public class Snippet
@@ -10,6 +12,10 @@ namespace KodDepolama
         public string Description { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        public bool IsFavorite { get; set; }
+        public int UsageCount { get; set; }
+        public DateTime? LastUsedAt { get; set; }
+        public string Folder { get; set; } = string.Empty;
 
         public override string ToString()
         {

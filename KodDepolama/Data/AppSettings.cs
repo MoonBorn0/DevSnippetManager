@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Collections.Generic;
 
 namespace DevSnippetManager.Data
 {
@@ -27,6 +28,7 @@ namespace DevSnippetManager.Data
         public int BackupIntervalHours { get; set; } = 24;
         public int MaxBackups { get; set; } = 10;
         public DateTime? LastBackupAt { get; set; }
+        public List<string> CustomLanguages { get; set; } = new List<string>();
 
         public static AppSettings Load()
         {
@@ -42,6 +44,7 @@ namespace DevSnippetManager.Data
                 var json = File.ReadAllText(SettingsFilePath);
                 var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
                 settings.ApplyDefaultsForEmptyPaths();
+                settings.CustomLanguages ??= new List<string>();
                 return settings;
             }
             catch (Exception ex)
@@ -65,7 +68,8 @@ namespace DevSnippetManager.Data
                     BackupFolder = _backupFolder,
                     BackupIntervalHours,
                     MaxBackups,
-                    LastBackupAt
+                    LastBackupAt,
+                    CustomLanguages
                 };
                 var json = JsonSerializer.Serialize(rawSettings, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(SettingsFilePath, json);

@@ -1,4 +1,5 @@
 using DevSnippetManager.ViewModels;
+using DevSnippetManager.Services;
 using System;
 using System.ComponentModel;
 using System.IO;
@@ -47,7 +48,7 @@ namespace KodDepolama
 
             _viewModel.UpdateEditorLanguageAction = (language) =>
             {
-                _pendingEditorLanguage = GetMonacoLanguageId(language);
+                _pendingEditorLanguage = LanguageCatalog.GetMonacoId(language);
                 if (_editorReady && webView.CoreWebView2 != null)
                 {
                     ApplyEditorLanguage();
@@ -134,17 +135,6 @@ namespace KodDepolama
             var encoded = JsonSerializer.Serialize(_pendingEditorLanguage);
             webView.CoreWebView2.ExecuteScriptAsync($"window.setLanguage({encoded});");
         }
-
-        private static string GetMonacoLanguageId(string? language) => language switch
-        {
-            "C#" => "csharp",
-            "Java" => "java",
-            "Python" => "python",
-            "SQL" => "sql",
-            "JavaScript" => "javascript",
-            "HTML/CSS" => "html",
-            _ => "plaintext"
-        };
 
         protected override void OnSourceInitialized(EventArgs e)
         {

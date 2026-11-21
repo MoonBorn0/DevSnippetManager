@@ -98,6 +98,10 @@ namespace DevSnippetManager.Services
                             Code = item.Code ?? string.Empty,
                             Tags = item.Tags ?? string.Empty,
                             Description = item.Description ?? string.Empty,
+                             Folder = item.Folder ?? string.Empty,
+                             IsFavorite = existingSnippet.IsFavorite,
+                             UsageCount = existingSnippet.UsageCount,
+                             LastUsedAt = existingSnippet.LastUsedAt,
                             CreatedAt = existingSnippet.CreatedAt,
                             UpdatedAt = now
                         });
@@ -129,7 +133,8 @@ namespace DevSnippetManager.Services
         {
             return !string.Equals(existing.Code ?? string.Empty, incoming.Code ?? string.Empty, StringComparison.Ordinal)
                 || !string.Equals(existing.Tags ?? string.Empty, incoming.Tags ?? string.Empty, StringComparison.Ordinal)
-                || !string.Equals(existing.Description ?? string.Empty, incoming.Description ?? string.Empty, StringComparison.Ordinal);
+                || !string.Equals(existing.Description ?? string.Empty, incoming.Description ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(existing.Folder ?? string.Empty, incoming.Folder ?? string.Empty, StringComparison.Ordinal);
         }
 
         private static Snippet CreateNewSnippet(Snippet source, DateTime now)
@@ -142,6 +147,10 @@ namespace DevSnippetManager.Services
                 Code = source.Code ?? string.Empty,
                 Tags = source.Tags ?? string.Empty,
                 Description = source.Description ?? string.Empty,
+                 Folder = source.Folder ?? string.Empty,
+                 IsFavorite = source.IsFavorite,
+                 UsageCount = source.UsageCount,
+                 LastUsedAt = source.LastUsedAt,
                 CreatedAt = source.CreatedAt == default ? now : source.CreatedAt,
                 UpdatedAt = source.UpdatedAt == default ? now : source.UpdatedAt
             };

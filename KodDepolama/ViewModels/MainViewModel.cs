@@ -9,9 +9,11 @@ using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -33,6 +35,8 @@ namespace DevSnippetManager.ViewModels
         private bool _suppressUnsavedCheck;
         private bool _suppressEditorReload;
         private Snippet? _editingSnippet;
+        private string? _newSnippetPrefilledFolder;
+        private readonly CultureInfo _turkish = new("tr-TR");
 
         public ISnackbarMessageQueue MessageQueue { get; } = new SnackbarMessageQueue(TimeSpan.FromSeconds(2));
 
@@ -49,10 +53,31 @@ namespace DevSnippetManager.ViewModels
         private string _selectedLanguageFilter = "Tüm diller";
 
         [ObservableProperty]
-        private ObservableCollection<string> _languages = new(new[] { "Tüm diller", "C#", "Java", "Python", "SQL", "JavaScript", "HTML/CSS", "Diğer" });
+        private ObservableCollection<string> _languages = new();
 
         [ObservableProperty]
-        private ObservableCollection<string> _editLanguages = new(new[] { "C#", "Java", "Python", "SQL", "JavaScript", "HTML/CSS", "Diğer" });
+        private ObservableCollection<string> _editLanguages = new();
+
+        [ObservableProperty]
+        private ObservableCollection<string> _editFolders = new();
+
+        [ObservableProperty]
+        private ObservableCollection<string> _folderFilters = new();
+
+        [ObservableProperty]
+        private string _selectedFolderFilter = "Tüm klasörler";
+
+        [ObservableProperty]
+        private ObservableCollection<TagFilterItem> _tagFilters = new();
+
+        [ObservableProperty]
+        private bool _hasTagFilter;
+
+        [ObservableProperty]
+        private ObservableCollection<string> _sortOptions = new(new[] { "Ada göre", "Son güncellenen", "En yeni", "En çok kullanılan" });
+
+        [ObservableProperty]
+        private string _selectedSortOption = "Ada göre";
 
         // Editor properties
         [ObservableProperty]
@@ -66,6 +91,12 @@ namespace DevSnippetManager.ViewModels
 
         [ObservableProperty]
         private string _editDescription = string.Empty;
+
+        [ObservableProperty]
+        private string _editFolder = string.Empty;
+
+        [ObservableProperty]
+        private bool _editIsFavorite;
 
         [ObservableProperty]
         private bool _isCodeModified;
@@ -139,15 +170,95 @@ namespace DevSnippetManager.ViewModels
         private async Task LoadDataAsync()
         {
             _allSnippets = (await _repository.GetAllAsync()).ToList();
+            RebuildOrganizationLists();
             FilterList();
         }
 
         partial void OnSearchTextChanged(string value) => FilterList();
         partial void OnSelectedLanguageFilterChanged(string value) => FilterList();
+        partial void OnSelectedFolderFilterChanged(string value) => FilterList();
+        partial void OnSelectedSortOptionChanged(string value) => FilterList();
 
         partial void OnEditLanguageChanged(string value)
         {
             UpdateEditorLanguageAction?.Invoke(value);
+        }
+
+        private void RebuildOrganizationLists()
+        {
+            var selectedLanguage = SelectedLanguageFilter;
+            var selectedFolder = SelectedFolderFilter;
+            var selectedTagNames = TagFilters.Where(t => t.IsSelected).Select(t => t.Name)
+                .ToHashSet(StringComparer.Create(_turkish, true));
+
+            var known = new List<string>(LanguageCatalog.BuiltInLanguages);
+            var knownSet = new HashSet<string>(known, StringComparer.OrdinalIgnoreCase);
+            foreach (var language in _settings.CustomLanguages ?? new List<string>())
+            {
+                var normalized = LanguageCatalog.Normalize(language);
+                if (knownSet.Add(normalized) && !string.Equals(normalized, "Diğer", StringComparison.OrdinalIgnoreCase))
+                    known.Add(normalized);
+            }
+            foreach (var snippet in _allSnippets)
+            {
+                var normalized = LanguageCatalog.Normalize(snippet.Language);
+                if (knownSet.Add(normalized) && !string.Equals(normalized, "Diğer", StringComparison.OrdinalIgnoreCase))
+                    known.Add(normalized);
+            }
+
+            var customLanguages = known.Skip(LanguageCatalog.BuiltInLanguages.Count).OrderBy(x => x, StringComparer.Create(_turkish, true)).ToList();
+            var languageList = LanguageCatalog.BuiltInLanguages.Where(x => !string.Equals(x, "Diğer", StringComparison.Ordinal)).ToList();
+            languageList.AddRange(customLanguages);
+            languageList.Add("Diğer");
+            Languages = new ObservableCollection<string>(new[] { "Tüm diller" }.Concat(languageList));
+            EditLanguages = new ObservableCollection<string>(languageList);
+            SelectedLanguageFilter = Languages.Contains(selectedLanguage) ? selectedLanguage : "Tüm diller";
+
+            var folders = _allSnippets.Select(s => s.Folder?.Trim() ?? string.Empty)
+                .Where(f => f.Length > 0).Distinct(StringComparer.Ordinal).OrderBy(f => f, StringComparer.Create(_turkish, true)).ToList();
+            EditFolders = new ObservableCollection<string>(folders);
+            FolderFilters = new ObservableCollection<string>(new[] { "Tüm klasörler", "Klasörsüz" }.Concat(folders));
+            SelectedFolderFilter = FolderFilters.Contains(selectedFolder) ? selectedFolder : "Tüm klasörler";
+
+            var tagGroups = _allSnippets.SelectMany(s => GetTags(s.Tags)
+                    .Distinct(StringComparer.Create(_turkish, true)))
+                .GroupBy(t => t, StringComparer.Create(_turkish, true));
+            var newTagFilters = tagGroups.Select(group => new TagFilterItem(
+                group.GroupBy(x => x, StringComparer.Create(_turkish, true))
+                    .OrderByDescending(x => x.Count()).ThenBy(x => x.Key, StringComparer.Create(_turkish, true)).First().Key,
+                group.Count()))
+                .OrderByDescending(t => t.Count).ThenBy(t => t.Name, StringComparer.Create(_turkish, true)).ToList();
+            foreach (var item in newTagFilters)
+            {
+                item.IsSelected = selectedTagNames.Contains(item.Name);
+                item.PropertyChanged += TagFilterItemPropertyChanged;
+            }
+            TagFilters = new ObservableCollection<TagFilterItem>(newTagFilters);
+            HasTagFilter = TagFilters.Any(t => t.IsSelected);
+        }
+
+        private static IEnumerable<string> GetTags(string? tags)
+        {
+            return (tags ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(tag => tag.Trim()).Where(tag => tag.Length > 0);
+        }
+
+        private void TagFilterItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(TagFilterItem.IsSelected))
+            {
+                HasTagFilter = TagFilters.Any(t => t.IsSelected);
+                FilterList();
+            }
+        }
+
+        [RelayCommand]
+        private void ClearTagFilters()
+        {
+            foreach (var tag in TagFilters)
+                tag.IsSelected = false;
+            HasTagFilter = false;
+            FilterList();
         }
 
         public bool HasUnsavedChanges
@@ -162,14 +273,16 @@ namespace DevSnippetManager.ViewModels
                 {
                     return !string.IsNullOrEmpty(EditTitle)
                         || !string.IsNullOrEmpty(EditTags)
-                        || !string.IsNullOrEmpty(EditDescription);
+                        || !string.IsNullOrEmpty(EditDescription)
+                        || !string.Equals(EditFolder, _newSnippetPrefilledFolder ?? string.Empty, StringComparison.Ordinal);
                 }
 
                 var selectedLanguage = string.IsNullOrWhiteSpace(editingSnippet.Language) ? "Diğer" : editingSnippet.Language;
                 return !string.Equals(EditTitle, editingSnippet.Title ?? string.Empty, StringComparison.Ordinal)
                     || !string.Equals(EditTags, editingSnippet.Tags ?? string.Empty, StringComparison.Ordinal)
                     || !string.Equals(EditLanguage, selectedLanguage, StringComparison.Ordinal)
-                    || !string.Equals(EditDescription, editingSnippet.Description ?? string.Empty, StringComparison.Ordinal);
+                    || !string.Equals(EditDescription, editingSnippet.Description ?? string.Empty, StringComparison.Ordinal)
+                    || !string.Equals(EditFolder, editingSnippet.Folder ?? string.Empty, StringComparison.Ordinal);
             }
         }
 
@@ -239,15 +352,19 @@ namespace DevSnippetManager.ViewModels
             if (value != null)
             {
                 _editingSnippet = value;
+                _newSnippetPrefilledFolder = null;
                 EditTitle = value.Title;
                 EditTags = value.Tags;
                 EditLanguage = string.IsNullOrWhiteSpace(value.Language) ? "Diğer" : value.Language;
                 EditDescription = value.Description;
+                EditFolder = value.Folder ?? string.Empty;
+                EditIsFavorite = value.IsFavorite;
                 IsCodeModified = false;
                 UpdateEditorCodeAction?.Invoke(value.Code);
             }
             else
             {
+                _newSnippetPrefilledFolder = null;
                 ClearEditor();
             }
         }
@@ -258,15 +375,38 @@ namespace DevSnippetManager.ViewModels
             var query = _allSnippets.AsEnumerable();
 
             if (SelectedLanguageFilter != "Tüm diller")
-                query = query.Where(s => s.Language == SelectedLanguageFilter);
+                query = query.Where(s => string.Equals(
+                    LanguageCatalog.Normalize(s.Language),
+                    SelectedLanguageFilter,
+                    StringComparison.OrdinalIgnoreCase));
+
+            if (SelectedFolderFilter == "Klasörsüz")
+                query = query.Where(s => string.IsNullOrWhiteSpace(s.Folder));
+            else if (SelectedFolderFilter != "Tüm klasörler")
+                query = query.Where(s => string.Equals(s.Folder, SelectedFolderFilter, StringComparison.Ordinal));
+
+            var selectedTags = TagFilters.Where(t => t.IsSelected).Select(t => t.Name).ToList();
+            if (selectedTags.Count > 0)
+                query = query.Where(s => selectedTags.All(selected => GetTags(s.Tags)
+                    .Distinct(StringComparer.Create(_turkish, true))
+                    .Any(tag => StringComparer.Create(_turkish, true).Equals(selected, tag))));
 
             if (!string.IsNullOrWhiteSpace(SearchText))
                 query = query.Where(s => (s.Title?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
                                          (s.Tags?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
                                          (s.Description?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                                          (s.Folder?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
                                          (s.Code?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false));
 
-            var filtered = query.OrderBy(s => s.Language).ThenBy(s => s.Title).ToList();
+            IOrderedEnumerable<Snippet> ordered = query.OrderByDescending(s => s.IsFavorite);
+            ordered = SelectedSortOption switch
+            {
+                "Son güncellenen" => ordered.ThenByDescending(s => s.UpdatedAt),
+                "En yeni" => ordered.ThenByDescending(s => s.CreatedAt),
+                "En çok kullanılan" => ordered.ThenByDescending(s => s.UsageCount).ThenByDescending(s => s.LastUsedAt).ThenBy(s => s.Title, StringComparer.Create(_turkish, true)),
+                _ => ordered.ThenBy(s => s.Title, StringComparer.Create(_turkish, true))
+            };
+            var filtered = ordered.ToList();
             
             var previousSuppressEditorReload = _suppressEditorReload;
             _suppressEditorReload = true;
@@ -299,11 +439,18 @@ namespace DevSnippetManager.ViewModels
                 {
                     _editingSnippet = null;
                     SelectedSnippet = null;
+                    ClearEditor();
                 }
                 else
                 {
                     _editingSnippet = null;
                     ClearEditor();
+                }
+                _newSnippetPrefilledFolder = null;
+                if (SelectedFolderFilter != "Tüm klasörler" && SelectedFolderFilter != "Klasörsüz")
+                {
+                    EditFolder = SelectedFolderFilter;
+                    _newSnippetPrefilledFolder = EditFolder;
                 }
             }
             finally
@@ -320,6 +467,8 @@ namespace DevSnippetManager.ViewModels
             EditTags = string.Empty;
             EditLanguage = "C#";
             EditDescription = string.Empty;
+            EditFolder = string.Empty;
+            EditIsFavorite = false;
             IsCodeModified = false;
             UpdateEditorCodeAction?.Invoke(string.Empty);
         }
@@ -339,11 +488,61 @@ namespace DevSnippetManager.ViewModels
             try
             {
                 System.Windows.Clipboard.SetText(code);
+                var usedSnippet = _editingSnippet;
+                if (usedSnippet != null && usedSnippet.Id != 0)
+                {
+                    var originalUsageCount = usedSnippet.UsageCount;
+                    var originalLastUsedAt = usedSnippet.LastUsedAt;
+                    usedSnippet.UsageCount++;
+                    usedSnippet.LastUsedAt = DateTime.Now;
+                    try
+                    {
+                        await _repository.UpdateMetadataAsync(usedSnippet);
+                        if (SelectedSortOption == "En çok kullanılan")
+                            FilterList();
+                    }
+                    catch
+                    {
+                        usedSnippet.UsageCount = originalUsageCount;
+                        usedSnippet.LastUsedAt = originalLastUsedAt;
+                        MessageQueue.Enqueue("Kullanım bilgisi güncellenemedi");
+                    }
+                }
                 MessageQueue.Enqueue("Kod panoya kopyalandı");
             }
             catch (Exception)
             {
                 MessageQueue.Enqueue("Panoya kopyalanamadı");
+            }
+        }
+
+        [RelayCommand]
+        private async Task ToggleFavoriteAsync(Snippet? snippet)
+        {
+            var target = snippet ?? _editingSnippet;
+            if (target == null)
+                return;
+            if (target.Id == 0)
+            {
+                MessageQueue.Enqueue("Önce snippet'i kaydedin");
+                return;
+            }
+
+            var original = target.IsFavorite;
+            target.IsFavorite = !original;
+            try
+            {
+                await _repository.UpdateMetadataAsync(target);
+                if (ReferenceEquals(target, _editingSnippet))
+                    EditIsFavorite = target.IsFavorite;
+                FilterList();
+            }
+            catch
+            {
+                target.IsFavorite = original;
+                if (ReferenceEquals(target, _editingSnippet))
+                    EditIsFavorite = original;
+                MessageQueue.Enqueue("Favori güncellenemedi");
             }
         }
 
@@ -367,17 +566,32 @@ namespace DevSnippetManager.ViewModels
             var originalDescription = existing?.Description;
             var originalCode = existing?.Code;
             var originalUpdatedAt = existing?.UpdatedAt;
+            var originalFolder = existing?.Folder;
+            var normalizedLanguage = LanguageCatalog.Normalize(EditLanguage);
+            var knownLanguage = LanguageCatalog.BuiltInLanguages.Any(x => string.Equals(x, normalizedLanguage, StringComparison.OrdinalIgnoreCase))
+                || (_settings.CustomLanguages ?? new List<string>()).Any(x => string.Equals(x, normalizedLanguage, StringComparison.OrdinalIgnoreCase))
+                || _allSnippets.Any(x => string.Equals(x.Language, normalizedLanguage, StringComparison.OrdinalIgnoreCase));
 
             try
             {
             snippet.Title = EditTitle.Trim();
             snippet.Tags = EditTags?.Trim() ?? "";
-            snippet.Language = EditLanguage;
+            snippet.Language = normalizedLanguage;
             snippet.Description = EditDescription?.Trim() ?? "";
+            snippet.Folder = EditFolder?.Trim() ?? string.Empty;
             snippet.Code = code;
             snippet.UpdatedAt = DateTime.Now;
 
             await _repository.AddOrUpdateAsync(snippet);
+
+            if (!knownLanguage)
+            {
+                _settings.CustomLanguages ??= new List<string>();
+                if (!_settings.CustomLanguages.Any(x => string.Equals(x, normalizedLanguage, StringComparison.OrdinalIgnoreCase)))
+                    _settings.CustomLanguages.Add(normalizedLanguage);
+                _settings.Save();
+            }
+
             _editingSnippet = snippet;
             var previousSuppressUnsavedCheck = _suppressUnsavedCheck;
             _suppressUnsavedCheck = true;
@@ -414,6 +628,7 @@ namespace DevSnippetManager.ViewModels
                     existing.Description = originalDescription;
                     existing.Code = originalCode;
                     existing.UpdatedAt = originalUpdatedAt!.Value;
+                    existing.Folder = originalFolder ?? string.Empty;
                 }
 
                 _editingSnippet = originalEditingSnippet;
@@ -578,6 +793,8 @@ namespace DevSnippetManager.ViewModels
                         EditTags = refreshed.Tags;
                         EditLanguage = string.IsNullOrWhiteSpace(refreshed.Language) ? "Diğer" : refreshed.Language;
                         EditDescription = refreshed.Description;
+                        EditFolder = refreshed.Folder ?? string.Empty;
+                        EditIsFavorite = refreshed.IsFavorite;
                         IsCodeModified = false;
                         UpdateEditorCodeAction?.Invoke(refreshed.Code);
                     }

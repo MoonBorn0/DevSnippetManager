@@ -2,6 +2,7 @@ using KodDepolama;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -23,6 +24,7 @@ namespace DevSnippetManager.Data
             try
             {
                 await _context.Database.EnsureCreatedAsync();
+                await EnsureOrganizationColumnsAsync();
 
                 if (!await _context.Snippets.AnyAsync())
                     await SeedDatabaseAsync();
@@ -38,6 +40,40 @@ namespace DevSnippetManager.Data
                     // Preserve the intended database initialization error.
                 }
                 throw new InvalidOperationException($"Veritabanı açılamadı: {_databasePath}. {ex.Message}", ex);
+            }
+        }
+
+        private async Task EnsureOrganizationColumnsAsync()
+        {
+            var connection = _context.Database.GetDbConnection();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA table_info(Snippets);";
+            if (connection.State != System.Data.ConnectionState.Open)
+                await connection.OpenAsync();
+
+            var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                    columns.Add(reader.GetString(1));
+            }
+
+            var missingColumns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["IsFavorite"] = "INTEGER NOT NULL DEFAULT 0",
+                ["UsageCount"] = "INTEGER NOT NULL DEFAULT 0",
+                ["LastUsedAt"] = "TEXT NULL",
+                ["Folder"] = "TEXT NOT NULL DEFAULT ''"
+            };
+
+            foreach (var missing in missingColumns)
+            {
+                if (columns.Contains(missing.Key))
+                    continue;
+
+                await using var alter = connection.CreateCommand();
+                alter.CommandText = $"ALTER TABLE Snippets ADD COLUMN {missing.Key} {missing.Value};";
+                await alter.ExecuteNonQueryAsync();
             }
         }
 
@@ -76,6 +112,43 @@ namespace DevSnippetManager.Data
                     await _context.Snippets.AddAsync(snippet);
                 }
                 await _context.SaveChangesAsync();
+            }
+            catch
+            {
+                _context.ChangeTracker.Clear();
+                throw;
+            }
+        }
+
+        public async Task UpdateMetadataAsync(Snippet snippet)
+        {
+            try
+            {
+                var entry = _context.Entry(snippet);
+                if (entry.State == EntityState.Detached)
+                    _context.Snippets.Attach(snippet);
+
+                entry = _context.Entry(snippet);
+                var rows = await _context.Snippets
+                    .Where(s => s.Id == snippet.Id)
+                    .ExecuteUpdateAsync(u => u
+                        .SetProperty(s => s.IsFavorite, snippet.IsFavorite)
+                        .SetProperty(s => s.UsageCount, snippet.UsageCount)
+                        .SetProperty(s => s.LastUsedAt, snippet.LastUsedAt));
+                if (rows == 0)
+                    throw new DbUpdateConcurrencyException("Snippet bulunamadı.");
+
+                var favoriteProperty = entry.Property(s => s.IsFavorite);
+                favoriteProperty.OriginalValue = favoriteProperty.CurrentValue;
+                favoriteProperty.IsModified = false;
+
+                var usageCountProperty = entry.Property(s => s.UsageCount);
+                usageCountProperty.OriginalValue = usageCountProperty.CurrentValue;
+                usageCountProperty.IsModified = false;
+
+                var lastUsedAtProperty = entry.Property(s => s.LastUsedAt);
+                lastUsedAtProperty.OriginalValue = lastUsedAtProperty.CurrentValue;
+                lastUsedAtProperty.IsModified = false;
             }
             catch
             {
