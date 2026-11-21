@@ -28,6 +28,12 @@ namespace DevSnippetManager.Data
         public int BackupIntervalHours { get; set; } = 24;
         public int MaxBackups { get; set; } = 10;
         public bool MinimizeToTray { get; set; } = true;
+        public string Theme { get; set; } = "Koyu";
+        public double SidebarWidth { get; set; } = 340;
+        public int EditorFontSize { get; set; } = 14;
+        public bool EditorWordWrap { get; set; }
+        public bool EditorMinimap { get; set; }
+        public bool ShowCodePreview { get; set; } = true;
         public DateTime? LastBackupAt { get; set; }
         public List<string> CustomLanguages { get; set; } = new List<string>();
 
@@ -46,6 +52,7 @@ namespace DevSnippetManager.Data
                 var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
                 settings.ApplyDefaultsForEmptyPaths();
                 settings.CustomLanguages ??= new List<string>();
+                settings.NormalizeDisplaySettings();
                 return settings;
             }
             catch (Exception ex)
@@ -70,6 +77,12 @@ namespace DevSnippetManager.Data
                     BackupIntervalHours,
                     MaxBackups,
                     MinimizeToTray,
+                    Theme,
+                    SidebarWidth,
+                    EditorFontSize,
+                    EditorWordWrap,
+                    EditorMinimap,
+                    ShowCodePreview,
                     LastBackupAt,
                     CustomLanguages
                 };
@@ -90,6 +103,14 @@ namespace DevSnippetManager.Data
                 _backupFolder = Path.Combine(AppDataFolder, "Backups");
         }
 
+        private void NormalizeDisplaySettings()
+        {
+            if (Theme is not ("Koyu" or "Açık" or "Sistem"))
+                Theme = "Koyu";
+            SidebarWidth = Math.Clamp(SidebarWidth, 260, 600);
+            EditorFontSize = Math.Clamp(EditorFontSize, 10, 28);
+        }
+
         private static string ExpandOrDefault(string? path, string defaultPath)
         {
             return string.IsNullOrWhiteSpace(path)
@@ -99,6 +120,15 @@ namespace DevSnippetManager.Data
 
         private static string GetAppDataFolder()
         {
+            // DEVVAULT_DATA_DIR, when set, overrides the normal %APPDATA%\\DevVault folder for testing.
+            var overrideFolder = Environment.GetEnvironmentVariable("DEVVAULT_DATA_DIR");
+            if (!string.IsNullOrWhiteSpace(overrideFolder))
+            {
+                var expandedOverride = Environment.ExpandEnvironmentVariables(overrideFolder);
+                try { Directory.CreateDirectory(expandedOverride); } catch (Exception ex) { Debug.WriteLine(ex.Message); }
+                return expandedOverride;
+            }
+
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var folder = Path.Combine(string.IsNullOrWhiteSpace(appData) ? Path.GetTempPath() : appData, "DevVault");
             try

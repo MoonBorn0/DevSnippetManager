@@ -1,4 +1,7 @@
 using System;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Linq;
+using System.Text.Json.Serialization;
 
 namespace KodDepolama
 {
@@ -16,6 +19,27 @@ namespace KodDepolama
         public int UsageCount { get; set; }
         public DateTime? LastUsedAt { get; set; }
         public string Folder { get; set; } = string.Empty;
+
+        [NotMapped]
+        [JsonIgnore]
+        public string CodePreview
+        {
+            get
+            {
+                var lines = (Code ?? string.Empty).Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .Take(3)
+                    .ToList();
+                if (lines.Count == 0) return string.Empty;
+
+                var indent = lines.Select(line => line.TakeWhile(char.IsWhiteSpace).Count()).Min();
+                return string.Join("\n", lines.Select(line =>
+                {
+                    var reduced = line.Length >= indent ? line[indent..].TrimEnd() : line.TrimEnd();
+                    return reduced.Length > 80 ? reduced[..79] + "…" : reduced;
+                }));
+            }
+        }
 
         public override string ToString()
         {

@@ -2,6 +2,9 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
+using DevSnippetManager.Data;
+using DevSnippetManager.Services;
+using DevSnippetManager.ViewModels;
 
 namespace KodDepolama
 {
@@ -40,6 +43,8 @@ namespace KodDepolama
                 return;
             }
 
+            var settings = AppSettings.Load();
+            ThemeService.Apply(settings.Theme);
             base.OnStartup(e);
         }
 
@@ -49,6 +54,10 @@ namespace KodDepolama
             if (MainWindow is MainWindow mainWindow)
             {
                 mainWindow.PrepareForExit();
+                if (mainWindow.DataContext is MainViewModel viewModel)
+                {
+                    viewModel.FlushPendingSettings();
+                }
             }
 
             base.OnSessionEnding(e);

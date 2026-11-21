@@ -1,17 +1,24 @@
 using DevSnippetManager.Services;
 using DevSnippetManager.ViewModels;
 using DevSnippetManager.Views;
+using MdXaml;
 using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Media3D;
+using System.Windows.Threading;
 using Drawing = System.Drawing;
 using WinForms = System.Windows.Forms;
 
@@ -34,10 +41,17 @@ namespace KodDepolama
 
         private MainViewModel _viewModel;
         private bool _editorReady;
+        private readonly DispatcherTimer _editorLoadTimer = new()
+        {
+            Interval = TimeSpan.FromSeconds(15)
+        };
         private string _pendingEditorCode = string.Empty;
         private string _pendingEditorLanguage = "csharp";
+        private MainViewModel.EditorOptions _pendingEditorOptions = new("vs-dark", 14, false, false);
 
         private WinForms.NotifyIcon? _notifyIcon;
+        private WinForms.ToolStripMenuItem? _minimizeToTrayMenuItem;
+        private bool _updatingTrayMenu;
         private Drawing.Icon? _extractedTrayIcon;
         private QuickSearchWindow? _quickSearchWindow;
         private bool _isExiting;
@@ -47,6 +61,11 @@ namespace KodDepolama
         {
             InitializeComponent();
             _viewModel = (MainViewModel)DataContext;
+            _pendingEditorOptions = _viewModel.CurrentEditorOptions;
+            _editorLoadTimer.Tick += EditorLoadTimer_Tick;
+            webView.DefaultBackgroundColor = _viewModel.IsLightTheme
+                ? Drawing.Color.FromArgb(255, 255, 255, 254)
+                : Drawing.Color.FromArgb(255, 30, 30, 30);
 
             // Setup WebView2 and Monaco bridge
             _viewModel.UpdateEditorCodeAction = (code) =>
@@ -65,6 +84,16 @@ namespace KodDepolama
                 {
                     ApplyEditorLanguage();
                 }
+            };
+
+            _viewModel.UpdateEditorOptionsAction = (options) =>
+            {
+                _pendingEditorOptions = options;
+                webView.DefaultBackgroundColor = options.MonacoTheme == "vs"
+                    ? Drawing.Color.FromArgb(255, 255, 255, 254)
+                    : Drawing.Color.FromArgb(255, 30, 30, 30);
+                if (_editorReady && webView.CoreWebView2 != null)
+                    ApplyEditorOptions();
             };
 
             _viewModel.GetEditorCodeFunc = async () =>
@@ -124,10 +153,13 @@ namespace KodDepolama
             };
             minimizeItem.CheckedChanged += (_, _) =>
             {
+                if (_updatingTrayMenu) return;
                 _viewModel.Settings.MinimizeToTray = minimizeItem.Checked;
                 _viewModel.SaveSettings();
             };
+            _minimizeToTrayMenuItem = minimizeItem;
             menu.Items.Add(minimizeItem);
+            menu.Items.Add("Ayarlar…", null, (_, _) => Dispatcher.Invoke(OpenSettingsWindow));
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Çıkış", null, (_, _) => Dispatcher.Invoke(ExitApplication));
 
@@ -230,19 +262,65 @@ namespace KodDepolama
             }
 
             _isExiting = true;
+            _viewModel.FlushPendingSettings();
             Close();
             System.Windows.Application.Current.Shutdown();
         }
 
         private async void InitializeAsync()
         {
-            await webView.EnsureCoreWebView2Async();
-            webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-                "devvault.local",
-                AppDomain.CurrentDomain.BaseDirectory,
-                CoreWebView2HostResourceAccessKind.Allow);
-            webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-            webView.Source = new Uri("https://devvault.local/MonacoEditor.html");
+            try
+            {
+                await webView.EnsureCoreWebView2Async();
+                webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                webView.ZoomFactor = 1.0;
+                var options = new
+                {
+                    theme = _pendingEditorOptions.MonacoTheme,
+                    fontSize = _pendingEditorOptions.FontSize,
+                    wordWrap = _pendingEditorOptions.WordWrap,
+                    minimap = _pendingEditorOptions.Minimap
+                };
+                var encodedOptions = JsonSerializer.Serialize(options);
+                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync($"window.__initOpts = {encodedOptions};");
+                webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                    "devvault.local",
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    CoreWebView2HostResourceAccessKind.Allow);
+                webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                webView.CoreWebView2.NavigationCompleted += CoreWebView2_NavigationCompleted;
+                webView.Source = new Uri("https://devvault.local/MonacoEditor.html");
+                _editorLoadTimer.Stop();
+                _editorLoadTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                webView.Visibility = Visibility.Visible;
+                EditorErrorText.Text = $"Editör yüklenemedi: {ex.Message}";
+                EditorErrorText.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void CoreWebView2_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            if (e.IsSuccess)
+                return;
+
+            _editorLoadTimer.Stop();
+            webView.Visibility = Visibility.Visible;
+            EditorErrorText.Text = $"Editör yüklenemedi (gezinme hatası: {e.WebErrorStatus}).";
+            EditorErrorText.Visibility = Visibility.Visible;
+        }
+
+        private void EditorLoadTimer_Tick(object? sender, EventArgs e)
+        {
+            _editorLoadTimer.Stop();
+            if (_editorReady)
+                return;
+
+            webView.Visibility = Visibility.Visible;
+            EditorErrorText.Text = "Editör yüklenmesi beklenenden uzun sürüyor…";
+            EditorErrorText.Visibility = Visibility.Visible;
         }
 
         private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -255,9 +333,13 @@ namespace KodDepolama
             {
                 if (type == "ready")
                 {
+                    _editorLoadTimer.Stop();
                     _editorReady = true;
+                    webView.Visibility = Visibility.Visible;
+                    EditorErrorText.Visibility = Visibility.Collapsed;
                     ApplyEditorCode();
                     ApplyEditorLanguage();
+                    ApplyEditorOptions();
                     return;
                 }
 
@@ -283,6 +365,15 @@ namespace KodDepolama
                         case "copy":
                             _viewModel.CopySnippetCommand.Execute(null);
                             break;
+                        case "fontInc":
+                            _viewModel.IncreaseFontSizeCommand.Execute(null);
+                            break;
+                        case "fontDec":
+                            _viewModel.DecreaseFontSizeCommand.Execute(null);
+                            break;
+                        case "fontReset":
+                            _viewModel.ResetFontSizeCommand.Execute(null);
+                            break;
                     }
                 }
             });
@@ -300,6 +391,20 @@ namespace KodDepolama
             if (!_editorReady || webView.CoreWebView2 == null) return;
             var encoded = JsonSerializer.Serialize(_pendingEditorLanguage);
             webView.CoreWebView2.ExecuteScriptAsync($"window.setLanguage({encoded});");
+        }
+
+        private void ApplyEditorOptions()
+        {
+            if (!_editorReady || webView.CoreWebView2 == null) return;
+            var options = new
+            {
+                theme = _pendingEditorOptions.MonacoTheme,
+                fontSize = _pendingEditorOptions.FontSize,
+                wordWrap = _pendingEditorOptions.WordWrap,
+                minimap = _pendingEditorOptions.Minimap
+            };
+            var encoded = JsonSerializer.Serialize(options);
+            webView.CoreWebView2.ExecuteScriptAsync($"window.setEditorOptions({encoded});");
         }
 
         protected override void OnSourceInitialized(EventArgs e)
@@ -383,11 +488,14 @@ namespace KodDepolama
             }
 
             _isExiting = true;
+            _editorLoadTimer.Stop();
+            _viewModel.FlushPendingSettings();
             base.OnClosing(e);
         }
 
         protected override void OnClosed(EventArgs e)
         {
+            _editorLoadTimer.Stop();
             IntPtr handle = new WindowInteropHelper(this).Handle;
             UnregisterHotKey(handle, HOTKEY_ID);
             UnregisterHotKey(handle, HOTKEY_QUICK_SEARCH_ID);
@@ -445,6 +553,132 @@ namespace KodDepolama
             }
         }
 
+        public void RefreshTrayMinimizeMenuItem()
+        {
+            if (_minimizeToTrayMenuItem == null) return;
+            _updatingTrayMenu = true;
+            try
+            {
+                _minimizeToTrayMenuItem.Checked = _viewModel.Settings.MinimizeToTray;
+            }
+            finally
+            {
+                _updatingTrayMenu = false;
+            }
+        }
+
+        private void OpenSettingsWindow()
+        {
+            ShowAndActivateMainWindow();
+            var settingsWindow = new SettingsWindow(_viewModel)
+            {
+                Owner = this
+            };
+            settingsWindow.ShowDialog();
+            RefreshTrayMinimizeMenuItem();
+        }
+
+        private void BtnSettings_Click(object sender, RoutedEventArgs e)
+        {
+            OpenSettingsWindow();
+        }
+
+        private void SidebarSplitter_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            _viewModel.SidebarWidth = 340;
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e) => UpdateEffectiveSidebarMaxWidth();
+
+        private void Window_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateEffectiveSidebarMaxWidth();
+
+        private void UpdateEffectiveSidebarMaxWidth()
+        {
+            var availableWidth = MainContentGrid.ActualWidth - 560 - 8;
+            SidebarColumn.MaxWidth = Math.Max(260, Math.Min(600, availableWidth));
+        }
+
+        private static DependencyObject? GetParentElement(object? element)
+        {
+            if (element is Visual || element is Visual3D)
+                return VisualTreeHelper.GetParent((DependencyObject)element);
+            if (element is ContentElement contentElement)
+                return ContentOperations.GetParent(contentElement);
+            if (element is FrameworkElement frameworkElement)
+                return frameworkElement.Parent;
+            if (element is FrameworkContentElement frameworkContentElement)
+                return frameworkContentElement.Parent;
+            return null;
+        }
+
+        private static bool IsInside<T>(object? source) where T : class
+        {
+            return FindAncestor<T>(source) != null;
+        }
+
+        private static T? FindAncestor<T>(object? source) where T : class
+        {
+            object? current = source;
+            while (current != null)
+            {
+                if (current is T match)
+                    return match;
+                current = GetParentElement(current);
+            }
+            return null;
+        }
+
+        private static bool HasTextSelection(object? source)
+        {
+            object? current = source;
+            while (current != null)
+            {
+                if (current is System.Windows.Controls.TextBox textBox && textBox.SelectionLength > 0)
+                    return true;
+                if (current is System.Windows.Controls.RichTextBox richTextBox && !richTextBox.Selection.IsEmpty)
+                    return true;
+                if (current is MarkdownScrollViewer markdownViewer)
+                {
+                    var selectionLength = markdownViewer.GetType().GetProperty("SelectionLength")?.GetValue(markdownViewer);
+                    if (selectionLength != null && Convert.ToInt32(selectionLength) > 0)
+                        return true;
+                }
+                current = GetParentElement(current);
+            }
+            return false;
+        }
+
+        private void DescriptionPreview_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (IsInside<System.Windows.Controls.Primitives.ScrollBar>(e.OriginalSource) ||
+                IsInside<Thumb>(e.OriginalSource) ||
+                IsInside<RepeatButton>(e.OriginalSource) ||
+                HasTextSelection(e.OriginalSource))
+                return;
+
+            var hyperlink = FindAncestor<Hyperlink>(e.OriginalSource);
+            if (hyperlink != null)
+            {
+                if (hyperlink.NavigateUri is Uri uri &&
+                    (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                {
+                    Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+                }
+                e.Handled = true;
+                return;
+            }
+
+            if (_viewModel.IsDescriptionPreview)
+            {
+                _viewModel.ToggleDescriptionPreviewCommand.Execute(null);
+                Dispatcher.BeginInvoke(() =>
+                {
+                    DescriptionTextBox.Focus();
+                    DescriptionTextBox.CaretIndex = DescriptionTextBox.Text.Length;
+                });
+            }
+        }
+
         private void BtnShortcuts_Click(object sender, RoutedEventArgs e)
         {
             var msg = "Global Kısayollar:\n" +
@@ -455,7 +689,8 @@ namespace KodDepolama
                       "- Ctrl + N : Yeni\n" +
                       "- Ctrl + Shift + V : Panodan yeni snippet\n" +
                       "- Ctrl + F : Arama\n" +
-                      "- Ctrl + Shift + C : Kopyala";
+                      "- Ctrl + Shift + C : Kopyala\n" +
+                      "- Ctrl + +/- / 0 (numpad da olur): Yazı boyutu";
             System.Windows.MessageBox.Show(msg, "Kısayollar", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }

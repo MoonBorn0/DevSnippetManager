@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        xmlns:mdxam="clr-namespace:MdXaml;assembly=MdXaml"
         xmlns:vm="clr-namespace:DevSnippetManager.ViewModels"
         xmlns:local="clr-namespace:KodDepolama"
         Title="DevVault - Kod Parçacığı Yöneticisi" Height="720" Width="1100"
@@ -14,11 +15,25 @@
         TextOptions.TextFormattingMode="Ideal"
         TextOptions.TextRenderingMode="Auto"
         Background="{DynamicResource MaterialDesignPaper}"
-        FontFamily="{DynamicResource MaterialDesignFont}">
+        FontFamily="{DynamicResource MaterialDesignFont}"
+        SizeChanged="Window_SizeChanged"
+        Loaded="Window_Loaded">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <local:InverseBooleanToVisibilityConverter x:Key="InvBoolToVis"/>
         <local:StringNotEmptyToVisibilityConverter x:Key="StringNotEmptyToVis"/>
+        <local:StringEmptyToVisibilityConverter x:Key="StringEmptyToVis"/>
         <local:PositiveIntToVisibilityConverter x:Key="PositiveIntToVis"/>
+        <local:DoubleToGridLengthConverter x:Key="DoubleToGridLength"/>
+        <local:CodePreviewVisibilityConverter x:Key="CodePreviewToVis"/>
+
+        <Style x:Key="ThemedMarkdownDocumentStyle" TargetType="FlowDocument">
+            <Setter Property="FontFamily" Value="{DynamicResource MaterialDesignFont}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource MaterialDesignBody}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="PagePadding" Value="0"/>
+        </Style>
 
         <Style x:Key="TagChipToggleStyle" TargetType="ToggleButton">
             <Setter Property="Cursor" Value="Hand"/>
@@ -65,20 +80,52 @@
 
         <!-- Header / ColorZone -->
         <materialDesign:ColorZone Grid.Row="0" Mode="PrimaryMid" Padding="20,12" materialDesign:ElevationAssist.Elevation="Dp4">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <materialDesign:PackIcon Kind="CodeBracesBox" Width="36" Height="36" VerticalAlignment="Center" Margin="0,0,16,0" />
-                <StackPanel>
-                    <TextBlock Text="DevVault" FontSize="24" FontWeight="Bold"/>
-                    <TextBlock Text="Profesyonel Kod Parçacığı Yöneticisi" FontSize="12" Opacity="0.8"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <materialDesign:PackIcon Kind="CodeBracesBox" Width="36" Height="36" VerticalAlignment="Center" Margin="0,0,16,0" />
+                    <StackPanel>
+                        <TextBlock Text="DevVault" FontSize="24" FontWeight="Bold"/>
+                        <TextBlock Text="Profesyonel Kod Parçacığı Yöneticisi" FontSize="12" Opacity="0.8"/>
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Command="{Binding ToggleThemeCommand}"
+                            Style="{StaticResource MaterialDesignToolForegroundButton}"
+                            Width="38" Height="38"
+                            Margin="0,0,4,0"
+                            ToolTip="Temayı değiştir">
+                        <materialDesign:PackIcon Width="22" Height="22">
+                            <materialDesign:PackIcon.Style>
+                                <Style TargetType="materialDesign:PackIcon">
+                                    <Setter Property="Kind" Value="WeatherSunny"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsLightTheme}" Value="True">
+                                            <Setter Property="Kind" Value="WeatherNight"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </materialDesign:PackIcon.Style>
+                        </materialDesign:PackIcon>
+                    </Button>
+                    <Button Click="BtnSettings_Click"
+                            Style="{StaticResource MaterialDesignToolForegroundButton}"
+                            Width="38" Height="38"
+                            ToolTip="Ayarlar">
+                        <materialDesign:PackIcon Kind="CogOutline" Width="22" Height="22"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
         </materialDesign:ColorZone>
 
         <!-- Content Area -->
-        <Grid Grid.Row="1" Margin="16">
+        <Grid x:Name="MainContentGrid" Grid.Row="1" Margin="16">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="340"/>
-                <ColumnDefinition Width="16"/>
+                <ColumnDefinition x:Name="SidebarColumn" Width="{Binding SidebarWidth, Mode=TwoWay, Converter={StaticResource DoubleToGridLength}}" MinWidth="260" MaxWidth="600"/>
+                <ColumnDefinition Width="8"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -195,6 +242,23 @@
                                             </Button>
                                         </Grid>
                                         <TextBlock Text="{Binding Description}" FontSize="12" Opacity="0.7" MaxHeight="34" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" Margin="0,4,0,4"/>
+                                        <Border CornerRadius="4"
+                                                Padding="6,4"
+                                                Margin="0,0,0,6"
+                                                Background="{DynamicResource MaterialDesignToolBarBackground}">
+                                            <Border.Visibility>
+                                                <MultiBinding Converter="{StaticResource CodePreviewToVis}">
+                                                    <Binding Path="DataContext.ShowCodePreview" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                    <Binding Path="CodePreview"/>
+                                                </MultiBinding>
+                                            </Border.Visibility>
+                                            <TextBlock Text="{Binding CodePreview}"
+                                                       FontFamily="Cascadia Mono, Consolas, Courier New"
+                                                       FontSize="11"
+                                                       Opacity="0.6"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       MaxHeight="48"/>
+                                        </Border>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
@@ -265,6 +329,41 @@
                 </Grid>
             </materialDesign:Card>
 
+            <GridSplitter Grid.Column="1"
+                          Width="8"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          Background="Transparent"
+                          Cursor="SizeWE"
+                          ToolTip="Genişliği ayarla (sıfırlamak için çift tıklayın)"
+                          MouseDoubleClick="SidebarSplitter_MouseDoubleClick">
+                <GridSplitter.Template>
+                    <ControlTemplate TargetType="GridSplitter">
+                        <Grid Background="Transparent">
+                            <Border x:Name="SplitterLine"
+                                    Width="2"
+                                    CornerRadius="1"
+                                    HorizontalAlignment="Center"
+                                    Margin="0,12"
+                                    Background="{DynamicResource MaterialDesignDivider}"
+                                    Opacity="0.5"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="SplitterLine" Property="Background" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                                <Setter TargetName="SplitterLine" Property="Opacity" Value="0.9"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="SplitterLine" Property="Background" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                                <Setter TargetName="SplitterLine" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </GridSplitter.Template>
+            </GridSplitter>
+
             <!-- Editor Card -->
             <materialDesign:Card Grid.Column="2" UniformCornerRadius="8" Padding="16" materialDesign:ElevationAssist.Elevation="Dp2">
                 <Grid>
@@ -286,7 +385,7 @@
                             <ColumnDefinition Width="8"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" materialDesign:HintAssist.Hint="Başlık" Style="{StaticResource MaterialDesignFloatingHintTextBox}" FontSize="16" FontWeight="SemiBold" Text="{Binding EditTitle, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBox Grid.Column="0" MinWidth="160" materialDesign:HintAssist.Hint="Başlık" Style="{StaticResource MaterialDesignFloatingHintTextBox}" FontSize="16" FontWeight="SemiBold" Text="{Binding EditTitle, UpdateSourceTrigger=PropertyChanged}" />
                         <ComboBox Grid.Column="2"
                                   IsEditable="True"
                                   materialDesign:HintAssist.Hint="Programlama Dili"
@@ -323,15 +422,101 @@
                         </Button>
                     </Grid>
 
-                    <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Etiketler (Virgülle ayırın)" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Text="{Binding EditTags, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,16"/>
-                    <TextBox Grid.Row="2" materialDesign:HintAssist.Hint="Açıklama / Notlar" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Text="{Binding EditDescription, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="True" MaxHeight="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,16"/>
+                    <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Etiketler (Virgülle ayırın)" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Text="{Binding EditTags, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,12"/>
+
+                    <!-- Description with Markdown Edit / Preview -->
+                    <StackPanel Grid.Row="2" Margin="0,0,0,12">
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Açıklama / Notlar"
+                                       FontSize="11.5"
+                                       Opacity="0.7"
+                                       VerticalAlignment="Center"/>
+                            <Button Grid.Column="1"
+                                    Command="{Binding ToggleDescriptionPreviewCommand}"
+                                    Style="{StaticResource MaterialDesignIconButton}"
+                                    Width="24" Height="24"
+                                    Padding="0">
+                                <Button.ToolTip>
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="Önizle"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDescriptionPreview}" Value="True">
+                                                        <Setter Property="Text" Value="Düzenle"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Button.ToolTip>
+                                <materialDesign:PackIcon Width="15" Height="15">
+                                    <materialDesign:PackIcon.Style>
+                                        <Style TargetType="materialDesign:PackIcon">
+                                            <Setter Property="Kind" Value="EyeOutline"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDescriptionPreview}" Value="True">
+                                                    <Setter Property="Kind" Value="PencilOutline"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </materialDesign:PackIcon.Style>
+                                </materialDesign:PackIcon>
+                            </Button>
+                        </Grid>
+
+                        <TextBox x:Name="DescriptionTextBox"
+                                 Visibility="{Binding IsDescriptionPreview, Converter={StaticResource InvBoolToVis}}"
+                                 materialDesign:HintAssist.Hint="Açıklama / Notlar (Markdown desteklenir)"
+                                 Style="{StaticResource MaterialDesignFloatingHintTextBox}"
+                                 Text="{Binding EditDescription, UpdateSourceTrigger=PropertyChanged}"
+                                 TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 MaxHeight="96"
+                                 VerticalScrollBarVisibility="Auto"/>
+
+                        <Border Visibility="{Binding IsDescriptionPreview, Converter={StaticResource BoolToVis}}"
+                                BorderThickness="1"
+                                BorderBrush="{DynamicResource MaterialDesignDivider}"
+                                CornerRadius="4"
+                                Padding="8,6"
+                                MinHeight="48"
+                                MaxHeight="110"
+                                Background="Transparent"
+                                Cursor="IBeam"
+                                PreviewMouseLeftButtonUp="DescriptionPreview_MouseLeftButtonUp">
+                            <Grid>
+                                <mdxam:MarkdownScrollViewer Markdown="{Binding EditDescription}"
+                                                            MarkdownStyle="{StaticResource ThemedMarkdownDocumentStyle}"
+                                                            Foreground="{DynamicResource MaterialDesignBody}"
+                                                            Background="Transparent"
+                                                            FontSize="13"
+                                                            VerticalScrollBarVisibility="Auto"
+                                                            HorizontalScrollBarVisibility="Disabled"
+                                                            Visibility="{Binding EditDescription, Converter={StaticResource StringNotEmptyToVis}}"/>
+                                <TextBlock Text="Açıklama yok — düzenlemek için tıklayın"
+                                           FontStyle="Italic"
+                                           Opacity="0.55"
+                                           VerticalAlignment="Center"
+                                           Visibility="{Binding EditDescription, Converter={StaticResource StringEmptyToVis}}"/>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
 
                     <!-- WebView2 for Monaco Editor -->
-                    <Border Grid.Row="3" Margin="0,0,0,16" BorderThickness="1" BorderBrush="{DynamicResource MaterialDesignDivider}" CornerRadius="4" ClipToBounds="True">
-                        <wv2:WebView2 x:Name="webView"/>
+                    <Border Grid.Row="3" Margin="0,0,0,16" BorderThickness="1" BorderBrush="{DynamicResource MaterialDesignDivider}" Background="{DynamicResource MaterialDesignPaper}" CornerRadius="4" ClipToBounds="True">
+                        <Grid>
+                            <wv2:WebView2 x:Name="webView" Visibility="Hidden"/>
+                            <TextBlock x:Name="EditorErrorText" Text="Editör yüklenemedi." Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.7"/>
+                        </Grid>
                     </Border>
 
-                    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <WrapPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Command="{Binding CopySnippetCommand}" Margin="0,0,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kopyala (Ctrl+Shift+C)">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="ContentCopy" Margin="0,0,4,0" VerticalAlignment="Center"/>
@@ -356,7 +541,7 @@
                                 <TextBlock Text="Kaydet" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-                    </StackPanel>
+                    </WrapPanel>
                 </Grid>
             </materialDesign:Card>
         </Grid>

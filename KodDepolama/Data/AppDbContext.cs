@@ -36,6 +36,7 @@ namespace DevSnippetManager.Data
                 entity.Property(e => e.Language).HasMaxLength(50);
                 entity.Property(e => e.Tags).HasMaxLength(200);
                 entity.Property(e => e.Folder).HasMaxLength(100);
+                entity.Ignore(e => e.CodePreview);
             });
             base.OnModelCreating(modelBuilder);
         }

@@ -27,6 +27,8 @@ namespace DevSnippetManager.ViewModels
         private readonly ISnippetRepository _repository;
         private readonly BackupService _backupService;
         private DispatcherTimer? _backupTimer;
+        private DispatcherTimer? _sidebarSaveTimer;
+        private bool _sidebarSettingsDirty;
         private bool _isAutoBackupRunning;
         private List<Snippet> _allSnippets = new();
         private bool _isRevertingSelection;
@@ -40,6 +42,41 @@ namespace DevSnippetManager.ViewModels
 
         public ISnackbarMessageQueue MessageQueue { get; } = new SnackbarMessageQueue(TimeSpan.FromSeconds(2));
         public AppSettings Settings => _settings;
+
+        public ObservableCollection<string> ThemeOptions { get; } = new(new[] { "Koyu", "Açık", "Sistem" });
+
+        [ObservableProperty]
+        private string _selectedTheme = "Koyu";
+
+        private bool _isLightTheme;
+        public bool IsLightTheme
+        {
+            get => _isLightTheme;
+            private set => SetProperty(ref _isLightTheme, value);
+        }
+
+        [ObservableProperty]
+        private double _sidebarWidth = 340;
+
+        [ObservableProperty]
+        private int _editorFontSize = 14;
+
+        [ObservableProperty]
+        private bool _editorWordWrap;
+
+        [ObservableProperty]
+        private bool _editorMinimap;
+
+        [ObservableProperty]
+        private bool _showCodePreview = true;
+
+        [ObservableProperty]
+        private bool _isDescriptionPreview;
+
+        public sealed record EditorOptions(string MonacoTheme, int FontSize, bool WordWrap, bool Minimap);
+        public Action<EditorOptions>? UpdateEditorOptionsAction { get; set; }
+        public EditorOptions CurrentEditorOptions => new(
+            ThemeService.MonacoThemeFor(IsLightTheme), EditorFontSize, EditorWordWrap, EditorMinimap);
 
         public void SaveSettings()
         {
@@ -118,10 +155,119 @@ namespace DevSnippetManager.ViewModels
         public MainViewModel()
         {
             _settings = AppSettings.Load();
+            _selectedTheme = _settings.Theme;
+            _sidebarWidth = Math.Clamp(_settings.SidebarWidth, 260, 600);
+            _editorFontSize = Math.Clamp(_settings.EditorFontSize, 10, 28);
+            _editorWordWrap = _settings.EditorWordWrap;
+            _editorMinimap = _settings.EditorMinimap;
+            _showCodePreview = _settings.ShowCodePreview;
+            IsLightTheme = ThemeService.Apply(_selectedTheme);
+            ThemeService.EffectiveThemeChanged += OnEffectiveThemeChanged;
             _repository = new SnippetRepository(_settings);
             _backupService = new BackupService(_settings);
             InitializeAsync();
         }
+
+        private void OnEffectiveThemeChanged(object? sender, bool isLight)
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.CheckAccess())
+                ApplyEffectiveTheme(isLight);
+            else
+                dispatcher.BeginInvoke(() => ApplyEffectiveTheme(isLight));
+        }
+
+        private void ApplyEffectiveTheme(bool isLight)
+        {
+            IsLightTheme = isLight;
+            UpdateEditorOptionsAction?.Invoke(CurrentEditorOptions);
+        }
+
+        partial void OnSelectedThemeChanged(string value)
+        {
+            _settings.Theme = value;
+            _settings.Save();
+            IsLightTheme = ThemeService.Apply(value);
+        }
+
+        partial void OnSidebarWidthChanged(double value)
+        {
+            var clamped = Math.Clamp(value, 260, 600);
+            if (Math.Abs(value - clamped) > 0.01)
+            {
+                SidebarWidth = clamped;
+                return;
+            }
+
+            _settings.SidebarWidth = clamped;
+            _sidebarSettingsDirty = true;
+            _sidebarSaveTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            _sidebarSaveTimer.Stop();
+            _sidebarSaveTimer.Tick -= SaveSidebarWidth;
+            _sidebarSaveTimer.Tick += SaveSidebarWidth;
+            _sidebarSaveTimer.Start();
+        }
+
+        private void SaveSidebarWidth(object? sender, EventArgs e)
+        {
+            _sidebarSaveTimer?.Stop();
+            _settings.Save();
+            _sidebarSettingsDirty = false;
+        }
+
+        public void FlushPendingSettings()
+        {
+            _sidebarSaveTimer?.Stop();
+            if (_sidebarSettingsDirty)
+            {
+                _settings.Save();
+                _sidebarSettingsDirty = false;
+            }
+        }
+
+        partial void OnEditorFontSizeChanged(int value)
+        {
+            var clamped = Math.Clamp(value, 10, 28);
+            if (value != clamped) { EditorFontSize = clamped; return; }
+            _settings.EditorFontSize = clamped;
+            _settings.Save();
+            UpdateEditorOptionsAction?.Invoke(CurrentEditorOptions);
+        }
+
+        partial void OnEditorWordWrapChanged(bool value)
+        {
+            _settings.EditorWordWrap = value;
+            _settings.Save();
+            UpdateEditorOptionsAction?.Invoke(CurrentEditorOptions);
+        }
+
+        partial void OnEditorMinimapChanged(bool value)
+        {
+            _settings.EditorMinimap = value;
+            _settings.Save();
+            UpdateEditorOptionsAction?.Invoke(CurrentEditorOptions);
+        }
+
+        partial void OnShowCodePreviewChanged(bool value)
+        {
+            _settings.ShowCodePreview = value;
+            _settings.Save();
+        }
+
+        [RelayCommand]
+        private void ToggleTheme() => SelectedTheme = IsLightTheme ? "Koyu" : "Açık";
+
+        [RelayCommand]
+        private void IncreaseFontSize() => EditorFontSize = Math.Min(28, EditorFontSize + 1);
+
+        [RelayCommand]
+        private void DecreaseFontSize() => EditorFontSize = Math.Max(10, EditorFontSize - 1);
+
+        [RelayCommand]
+        private void ResetFontSize() => EditorFontSize = 14;
+
+        [RelayCommand]
+        private void ToggleDescriptionPreview() => IsDescriptionPreview = !IsDescriptionPreview;
 
         private async void InitializeAsync()
         {
@@ -365,6 +511,7 @@ namespace DevSnippetManager.ViewModels
                 EditTags = value.Tags;
                 EditLanguage = string.IsNullOrWhiteSpace(value.Language) ? "Diğer" : value.Language;
                 EditDescription = value.Description;
+                IsDescriptionPreview = !string.IsNullOrWhiteSpace(value.Description);
                 EditFolder = value.Folder ?? string.Empty;
                 EditIsFavorite = value.IsFavorite;
                 IsCodeModified = false;
@@ -492,6 +639,7 @@ namespace DevSnippetManager.ViewModels
             EditTags = string.Empty;
             EditLanguage = "C#";
             EditDescription = string.Empty;
+            IsDescriptionPreview = false;
             EditFolder = string.Empty;
             EditIsFavorite = false;
             IsCodeModified = false;
@@ -533,6 +681,7 @@ namespace DevSnippetManager.ViewModels
                     EditTags = target.Tags;
                     EditLanguage = string.IsNullOrWhiteSpace(target.Language) ? "DiÄŸer" : target.Language;
                     EditDescription = target.Description;
+                    IsDescriptionPreview = !string.IsNullOrWhiteSpace(target.Description);
                     if (string.IsNullOrWhiteSpace(target.Language))
                         EditLanguage = "\u0044i\u011Fer";
                     EditFolder = target.Folder ?? string.Empty;
@@ -950,6 +1099,7 @@ namespace DevSnippetManager.ViewModels
                         EditTags = refreshed.Tags;
                         EditLanguage = string.IsNullOrWhiteSpace(refreshed.Language) ? "Diğer" : refreshed.Language;
                         EditDescription = refreshed.Description;
+                        IsDescriptionPreview = !string.IsNullOrWhiteSpace(refreshed.Description);
                         EditFolder = refreshed.Folder ?? string.Empty;
                         EditIsFavorite = refreshed.IsFavorite;
                         IsCodeModified = false;
