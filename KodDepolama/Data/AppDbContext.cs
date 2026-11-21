@@ -9,6 +9,7 @@ namespace DevSnippetManager.Data
         private readonly string _databasePath;
 
         public DbSet<Snippet> Snippets { get; set; }
+        public DbSet<SnippetVersion> SnippetVersions { get; set; }
 
         public AppDbContext(string databasePath)
         {
@@ -37,6 +38,20 @@ namespace DevSnippetManager.Data
                 entity.Property(e => e.Tags).HasMaxLength(200);
                 entity.Property(e => e.Folder).HasMaxLength(100);
                 entity.Ignore(e => e.CodePreview);
+            });
+
+            modelBuilder.Entity<SnippetVersion>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Title).IsRequired().HasMaxLength(150);
+                entity.Property(e => e.Language).HasMaxLength(50);
+                entity.Property(e => e.Tags).HasMaxLength(200);
+                entity.Property(e => e.Folder).HasMaxLength(100);
+                entity.HasIndex(e => new { e.SnippetId, e.SavedAt });
+                entity.HasOne<Snippet>()
+                      .WithMany()
+                      .HasForeignKey(e => e.SnippetId)
+                      .OnDelete(DeleteBehavior.Cascade);
             });
             base.OnModelCreating(modelBuilder);
         }

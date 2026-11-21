@@ -51,6 +51,7 @@ namespace KodDepolama
 
         private WinForms.NotifyIcon? _notifyIcon;
         private WinForms.ToolStripMenuItem? _minimizeToTrayMenuItem;
+        private WinForms.ToolStripMenuItem? _trayPushGistMenuItem;
         private bool _updatingTrayMenu;
         private Drawing.Icon? _extractedTrayIcon;
         private QuickSearchWindow? _quickSearchWindow;
@@ -107,6 +108,15 @@ namespace KodDepolama
             };
 
             _viewModel.RequestTemplateValuesFunc = RequestTemplateValuesAsync;
+            _viewModel.ShowHistoryWindowFunc = (historyVm) =>
+            {
+                var window = new HistoryWindow(historyVm, _viewModel.RestoreVersion)
+                {
+                    Owner = this
+                };
+                window.ShowDialog();
+                return Task.CompletedTask;
+            };
 
             InitializeTrayIcon();
             InitializeAsync();
@@ -144,6 +154,22 @@ namespace KodDepolama
                 _viewModel.NewFromClipboardCommand.Execute(null);
             }));
             menu.Items.Add("Hızlı ara (Ctrl+Shift+Space)", null, (_, _) => Dispatcher.Invoke(ToggleQuickSearch));
+            _trayPushGistMenuItem = new WinForms.ToolStripMenuItem("Gist'e gönder", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                if (_viewModel.Sync.PushToGistCommand.CanExecute(null))
+                    _viewModel.Sync.PushToGistCommand.Execute(null);
+            }))
+            {
+                Enabled = _viewModel.Sync.HasGitHubToken
+            };
+            menu.Items.Add(_trayPushGistMenuItem);
+            _viewModel.Sync.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(SyncViewModel.HasGitHubToken) || args.PropertyName == nameof(SyncViewModel.IsSyncBusy))
+                {
+                    Dispatcher.Invoke(RefreshTraySyncMenuItem);
+                }
+            };
             menu.Items.Add(new WinForms.ToolStripSeparator());
 
             var minimizeItem = new WinForms.ToolStripMenuItem("Kapatınca tepsiye küçült")
@@ -555,15 +581,26 @@ namespace KodDepolama
 
         public void RefreshTrayMinimizeMenuItem()
         {
-            if (_minimizeToTrayMenuItem == null) return;
-            _updatingTrayMenu = true;
-            try
+            if (_minimizeToTrayMenuItem != null)
             {
-                _minimizeToTrayMenuItem.Checked = _viewModel.Settings.MinimizeToTray;
+                _updatingTrayMenu = true;
+                try
+                {
+                    _minimizeToTrayMenuItem.Checked = _viewModel.Settings.MinimizeToTray;
+                }
+                finally
+                {
+                    _updatingTrayMenu = false;
+                }
             }
-            finally
+            RefreshTraySyncMenuItem();
+        }
+
+        private void RefreshTraySyncMenuItem()
+        {
+            if (_trayPushGistMenuItem != null)
             {
-                _updatingTrayMenu = false;
+                _trayPushGistMenuItem.Enabled = _viewModel.Sync.HasGitHubToken && !_viewModel.Sync.IsSyncBusy;
             }
         }
 

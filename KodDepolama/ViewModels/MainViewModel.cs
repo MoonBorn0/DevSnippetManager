@@ -150,7 +150,9 @@ namespace DevSnippetManager.ViewModels
         public Action<string>? UpdateEditorLanguageAction { get; set; }
         public Func<Task<string>>? GetEditorCodeFunc { get; set; }
         public Func<IReadOnlyList<TemplateVariable>, Task<IReadOnlyDictionary<string, string>?>>? RequestTemplateValuesFunc { get; set; }
+        public Func<HistoryViewModel, Task>? ShowHistoryWindowFunc { get; set; }
         public IReadOnlyList<Snippet> AllSnippets => _allSnippets;
+        public SyncViewModel Sync { get; }
 
         public MainViewModel()
         {
@@ -165,6 +167,7 @@ namespace DevSnippetManager.ViewModels
             ThemeService.EffectiveThemeChanged += OnEffectiveThemeChanged;
             _repository = new SnippetRepository(_settings);
             _backupService = new BackupService(_settings);
+            Sync = new SyncViewModel(this, _settings);
             InitializeAsync();
         }
 
@@ -516,6 +519,7 @@ namespace DevSnippetManager.ViewModels
                 EditIsFavorite = value.IsFavorite;
                 IsCodeModified = false;
                 UpdateEditorCodeAction?.Invoke(value.Code);
+                ShowHistoryCommand.NotifyCanExecuteChanged();
             }
             else
             {
@@ -644,6 +648,52 @@ namespace DevSnippetManager.ViewModels
             EditIsFavorite = false;
             IsCodeModified = false;
             UpdateEditorCodeAction?.Invoke(string.Empty);
+            ShowHistoryCommand.NotifyCanExecuteChanged();
+        }
+
+        private bool CanShowHistory() => _editingSnippet != null && _editingSnippet.Id != 0;
+
+        [RelayCommand(CanExecute = nameof(CanShowHistory))]
+        private async Task ShowHistoryAsync()
+        {
+            if (_editingSnippet == null || _editingSnippet.Id == 0 || ShowHistoryWindowFunc == null)
+                return;
+
+            var currentCode = GetEditorCodeFunc != null
+                ? await GetEditorCodeFunc()
+                : (_editingSnippet.Code ?? string.Empty);
+
+            var historyVm = new HistoryViewModel(_repository, _editingSnippet, currentCode);
+            await historyVm.LoadAsync();
+            await ShowHistoryWindowFunc(historyVm);
+        }
+
+        public bool RestoreVersion(SnippetVersion version)
+        {
+            if (version == null)
+                return false;
+
+            if (HasUnsavedChanges)
+            {
+                var proceed = System.Windows.MessageBox.Show(
+                    "Kaydedilmemiş değişiklikler kaybolacak. Sürüm yine de yüklensin mi?",
+                    "Uyarı",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (proceed != MessageBoxResult.Yes)
+                    return false;
+            }
+
+            EditTitle = version.Title ?? string.Empty;
+            EditLanguage = string.IsNullOrWhiteSpace(version.Language) ? "Diğer" : version.Language;
+            EditTags = version.Tags ?? string.Empty;
+            EditDescription = version.Description ?? string.Empty;
+            EditFolder = version.Folder ?? string.Empty;
+            IsDescriptionPreview = false;
+            UpdateEditorCodeAction?.Invoke(version.Code ?? string.Empty);
+            IsCodeModified = true;
+            MessageQueue.Enqueue("Sürüm editöre yüklendi — kaydetmek için Kaydet'e basın");
+            return true;
         }
 
         public void MarkCodeChanged() => IsCodeModified = true;
@@ -899,6 +949,7 @@ namespace DevSnippetManager.ViewModels
             }
 
             _editingSnippet = snippet;
+            ShowHistoryCommand.NotifyCanExecuteChanged();
             var previousSuppressUnsavedCheck = _suppressUnsavedCheck;
             _suppressUnsavedCheck = true;
             try
@@ -1015,6 +1066,16 @@ namespace DevSnippetManager.ViewModels
 
             var mode = optionsWindow.SelectedMode;
             var plan = ImportMerger.Plan(_allSnippets, imported, mode);
+            await ApplyImportPlanAsync(plan, mode, "İçe aktarıldı", createBackupBeforeApply: mode == ImportMode.ReplaceAll);
+        }
+
+        internal string SerializeAllSnippets()
+        {
+            return JsonSerializer.Serialize(_allSnippets, new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        internal async Task<bool> ApplyImportPlanAsync(ImportPlan plan, ImportMode mode, string snackbarPrefix, bool createBackupBeforeApply)
+        {
             var openSnippetId = _editingSnippet?.Id ?? SelectedSnippet?.Id;
             var hadUnsavedChanges = HasUnsavedChanges;
             var previousSuppressUnsavedCheck = _suppressUnsavedCheck;
@@ -1025,70 +1086,74 @@ namespace DevSnippetManager.ViewModels
 
             try
             {
-            if (mode == ImportMode.ReplaceAll)
-            {
-                try
+                if (createBackupBeforeApply)
                 {
-                    await _backupService.CreateBackupAsync(_allSnippets.ToList());
-                }
-                catch (Exception ex)
-                {
-                    var proceed = System.Windows.MessageBox.Show(
-                        $"Otomatik yedek alınamadı: {ex.Message}\nYedek olmadan devam edilsin mi?",
-                        "Uyarı",
-                        MessageBoxButton.YesNo,
-                        MessageBoxImage.Warning);
-                    if (proceed != MessageBoxResult.Yes)
-                        return;
+                    try
+                    {
+                        await _backupService.CreateBackupAsync(_allSnippets.ToList());
+                    }
+                    catch (Exception ex)
+                    {
+                        var proceed = System.Windows.MessageBox.Show(
+                            $"Otomatik yedek alınamadı: {ex.Message}\nYedek olmadan devam edilsin mi?",
+                            "Uyarı",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Warning);
+                        if (proceed != MessageBoxResult.Yes)
+                            return false;
+                    }
                 }
 
-                await _repository.ReplaceAllAsync(plan.ToAdd);
+                if (mode == ImportMode.ReplaceAll)
+                {
+                    await _repository.ReplaceAllAsync(plan.ToAdd);
+                    _suppressUnsavedCheck = true;
+                    try
+                    {
+                        _editingSnippet = null;
+                        SelectedSnippet = null;
+                        ClearEditor();
+                    }
+                    finally
+                    {
+                        _suppressUnsavedCheck = false;
+                    }
+                }
+                else
+                {
+                    foreach (var updated in plan.ToUpdate)
+                        await _repository.AddOrUpdateAsync(updated);
+
+                    if (plan.ToAdd.Count > 0)
+                        await _repository.AddRangeAsync(plan.ToAdd);
+                }
+
                 _suppressUnsavedCheck = true;
                 try
                 {
-                    _editingSnippet = null;
-                    SelectedSnippet = null;
-                    ClearEditor();
+                    await LoadDataAsync();
                 }
                 finally
                 {
                     _suppressUnsavedCheck = false;
                 }
-            }
 
-            else
-            {
-                foreach (var updated in plan.ToUpdate)
-                    await _repository.AddOrUpdateAsync(updated);
-
-                if (plan.ToAdd.Count > 0)
-                    await _repository.AddRangeAsync(plan.ToAdd);
-            }
-
-            _suppressUnsavedCheck = true;
-            try
-            {
-                await LoadDataAsync();
-            }
-            finally
-            {
-                _suppressUnsavedCheck = false;
-            }
-
-            updatedOpenSnippet = openSnippetId.HasValue
-                ? plan.ToUpdate.FirstOrDefault(s => s.Id == openSnippetId.Value)
-                : null;
-            preserveOpenChanges = updatedOpenSnippet != null && hadUnsavedChanges;
-            importSucceeded = true;
-            MessageQueue.Enqueue($"İçe aktarıldı: {plan.ToAdd.Count} eklendi, {plan.ToUpdate.Count} güncellendi, {plan.Skipped.Count} atlandı" + (preserveOpenChanges ? " (açık snippet'teki değişiklikleriniz korundu)" : string.Empty));
+                updatedOpenSnippet = openSnippetId.HasValue
+                    ? plan.ToUpdate.FirstOrDefault(s => s.Id == openSnippetId.Value)
+                    : null;
+                preserveOpenChanges = updatedOpenSnippet != null && hadUnsavedChanges;
+                importSucceeded = true;
+                MessageQueue.Enqueue($"{snackbarPrefix}: {plan.ToAdd.Count} eklendi, {plan.ToUpdate.Count} güncellendi, {plan.Skipped.Count} atlandı" + (preserveOpenChanges ? " (açık snippet'teki değişiklikleriniz korundu)" : string.Empty));
+                return true;
             }
             catch (Exception ex)
             {
                 System.Windows.MessageBox.Show($"İçe aktarma başarısız: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
             }
             finally
             {
-                if (importSucceeded && updatedOpenSnippet != null && !hadUnsavedChanges)
+                if (importSucceeded && updatedOpenSnippet != null && !hadUnsavedChanges && openSnippetId.HasValue)
                 {
                     var refreshed = _allSnippets.FirstOrDefault(s => s.Id == openSnippetId.Value);
                     if (refreshed != null)
@@ -1104,6 +1169,7 @@ namespace DevSnippetManager.ViewModels
                         EditIsFavorite = refreshed.IsFavorite;
                         IsCodeModified = false;
                         UpdateEditorCodeAction?.Invoke(refreshed.Code);
+                        ShowHistoryCommand.NotifyCanExecuteChanged();
                     }
                 }
                 _suppressUnsavedCheck = previousSuppressUnsavedCheck;

@@ -16,6 +16,8 @@ namespace DevSnippetManager
         Task ReplaceAllAsync(IEnumerable<Snippet> snippets);
         Task DeleteAsync(Snippet snippet);
         Task ClearAsync();
+        Task<IReadOnlyList<SnippetVersion>> GetVersionsAsync(int snippetId) =>
+            Task.FromResult<IReadOnlyList<SnippetVersion>>(Array.Empty<SnippetVersion>());
         Task<List<Snippet>> ImportAsync(string filePath);
         Task ExportAsync(string filePath, IEnumerable<Snippet> snippets);
     }

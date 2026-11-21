@@ -20,6 +20,10 @@ DevVault, kod parçacıklarınızı (snippet) yerel **SQLite** veritabanında sa
 - **Otomatik ve Manuel Yedekleme:** Belirlenen aralıklarla otomatik JSON yedeği alma, eski yedekleri otomatik temizleme, tek tıkla anlık yedek alma ve yedek klasörünü açma
 - **Hazır Örnek Veriler:** İlk çalıştırmada örnek kod parçacıklarını otomatik olarak veritabanına ekler
 
+## Sürüm geçmişi
+
+Mevcut bir snippet'in başlık, dil, etiket, açıklama, klasör veya kod içeriği değiştirilip kaydedildiğinde (veya içe aktarmada birleştirme ile güncellendiğinde) önceki hali otomatik olarak **Sürüm Geçmişi**ne kaydedilir (snippet başına en fazla 20 sürüm saklanır; yalnızca favori/kullanım sayısı güncellemeleri sürüm oluşturmaz). Editör alt çubuğundaki **Geçmiş** butonuyla sürümleri satır bazlı fark (diff) görünümü ve *"Sadece değişiklikler"* filtresiyle inceleyebilir, seçtiğiniz bir sürümü tek tıkla editöre geri yükleyebilirsiniz.
+
 ## Klavye Kısayolları
 
 - **Global Kısayollar (uygulama tepside çalışırken de etkindir):**
@@ -61,5 +65,15 @@ Gereksinim: .NET 10 SDK (Windows).
 Projeyi derlemek için:
 
 ```powershell
-dotnet build KodDepolama\DevSnippetManager.csproj
+dotnet build DevSnippetManager.slnx
 ```
+
+## Testler
+
+Birim testlerini çalıştırmak için:
+
+```powershell
+dotnet test DevSnippetManager.slnx
+```
+
+Testler izole bir geçici `DEVVAULT_DATA_DIR` klasöründe çalışır ve `%APPDATA%\DevVault` verilerinize dokunmaz.

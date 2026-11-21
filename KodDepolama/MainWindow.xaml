@@ -517,25 +517,31 @@
                     </Border>
 
                     <WrapPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Command="{Binding CopySnippetCommand}" Margin="0,0,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kopyala (Ctrl+Shift+C)">
+                        <Button Command="{Binding ShowHistoryCommand}" Margin="0,4,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Sürüm geçmişi">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="History" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Geçmiş" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding CopySnippetCommand}" Margin="0,4,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kopyala (Ctrl+Shift+C)">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="ContentCopy" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Kopyala" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-                        <Button Click="BtnShortcuts_Click" Margin="0,0,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kısayolları Göster">
+                        <Button Click="BtnShortcuts_Click" Margin="0,4,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kısayolları Göster">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="KeyboardOutline" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Kısayollar" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-                        <Button Command="{Binding DeleteSnippetCommand}" Margin="0,0,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#ff5252" BorderBrush="#ff5252" ToolTip="Bu kaydı sil">
+                        <Button Command="{Binding DeleteSnippetCommand}" Margin="0,4,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#ff5252" BorderBrush="#ff5252" ToolTip="Bu kaydı sil">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="TrashCanOutline" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Sil" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-                        <Button Command="{Binding SaveSnippetCommand}" ToolTip="Kaydet (Ctrl+S)">
+                        <Button Command="{Binding SaveSnippetCommand}" Margin="0,4,0,0" ToolTip="Kaydet (Ctrl+S)">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="ContentSaveOutline" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Kaydet" VerticalAlignment="Center"/>

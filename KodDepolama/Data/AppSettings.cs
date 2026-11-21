@@ -36,6 +36,10 @@ namespace DevSnippetManager.Data
         public bool ShowCodePreview { get; set; } = true;
         public DateTime? LastBackupAt { get; set; }
         public List<string> CustomLanguages { get; set; } = new List<string>();
+        public string GitHubTokenProtected { get; set; } = string.Empty;
+        public string GistId { get; set; } = string.Empty;
+        public DateTimeOffset? LastGistSyncAt { get; set; }
+        public DateTimeOffset? LastGistRemoteUpdatedAt { get; set; }
 
         public static AppSettings Load()
         {
@@ -52,6 +56,8 @@ namespace DevSnippetManager.Data
                 var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
                 settings.ApplyDefaultsForEmptyPaths();
                 settings.CustomLanguages ??= new List<string>();
+                settings.GitHubTokenProtected ??= string.Empty;
+                settings.GistId ??= string.Empty;
                 settings.NormalizeDisplaySettings();
                 return settings;
             }
@@ -84,7 +90,11 @@ namespace DevSnippetManager.Data
                     EditorMinimap,
                     ShowCodePreview,
                     LastBackupAt,
-                    CustomLanguages
+                    CustomLanguages,
+                    GitHubTokenProtected,
+                    GistId,
+                    LastGistSyncAt,
+                    LastGistRemoteUpdatedAt
                 };
                 var json = JsonSerializer.Serialize(rawSettings, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(SettingsFilePath, json);

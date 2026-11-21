@@ -1,0 +1,424 @@
+### C#
+using System;
+using System.Linq;
+
+namespace Shop.Orders
+{
+    public class OrderService
+    {
+        private readonly List<Order> _orders = new();
+
+        public decimal Total(int customerId) =>
+            _orders.Where(o => o.CustomerId == customerId).Sum(o => o.Amount);
+    }
+}
+### C#
+public async Task<IActionResult> GetUser(int id)
+{
+    var user = await _context.Users.FindAsync(id);
+    if (user == null)
+        return NotFound();
+    return Ok(user);
+}
+### C#
+// Parse a CSV line into fields
+static string[] Split(string line)
+{
+    var parts = line.Split(',');
+    for (int i = 0; i < parts.Length; i++)
+        parts[i] = parts[i].Trim();
+    Console.WriteLine($"Parsed {parts.Length} fields");
+    return parts;
+}
+### Python
+import os
+import sys
+from collections import defaultdict
+
+def count_words(path):
+    counts = defaultdict(int)
+    with open(path) as f:
+        for line in f:
+            for w in line.split():
+                counts[w.lower()] += 1
+    return counts
+
+if __name__ == "__main__":
+    print(count_words(sys.argv[1]))
+### Python
+class Stack:
+    def __init__(self):
+        self.items = []
+
+    def push(self, item):
+        self.items.append(item)
+
+    def pop(self):
+        return self.items.pop() if self.items else None
+### Python
+squares = [x**2 for x in range(10) if x % 2 == 0]
+result = {k: v for k, v in zip("abc", squares)}
+print(f"Result: {result}")
+try:
+    val = int(input("n: "))
+except ValueError:
+    print("bad input")
+### JavaScript
+const express = require('express');
+const app = express();
+
+app.get('/api/items', async (req, res) => {
+  const items = await db.find({});
+  res.json(items);
+});
+
+app.listen(3000, () => console.log('listening'));
+### JavaScript
+function debounce(fn, delay) {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+### JavaScript
+document.querySelectorAll('.btn').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.preventDefault();
+    console.log(btn.dataset.id);
+  });
+});
+### TypeScript
+interface User {
+  id: number;
+  name: string;
+  email?: string;
+}
+
+export function greet(user: User): string {
+  return `Hello, ${user.name}`;
+}
+### TypeScript
+@Injectable({ providedIn: 'root' })
+export class DataService {
+  constructor(private http: HttpClient) {}
+
+  getAll(): Observable<Item[]> {
+    return this.http.get<Item[]>('/api/items');
+  }
+}
+### TypeScript
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+const parse = (s: string): Result<number> => {
+  const n: number = Number(s);
+  return isNaN(n) ? { ok: false, error: "NaN" } : { ok: true, value: n };
+};
+### SQL
+SELECT c.name, COUNT(o.id) AS order_count
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id
+WHERE o.created_at >= '2023-01-01'
+GROUP BY c.name
+HAVING COUNT(o.id) > 5
+ORDER BY order_count DESC;
+### SQL
+CREATE TABLE employees (
+    id INT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    salary DECIMAL(10,2),
+    dept_id INT REFERENCES departments(id)
+);
+### SQL
+UPDATE products SET price = price * 1.1 WHERE category = 'books';
+DELETE FROM sessions WHERE expires_at < NOW();
+INSERT INTO log (msg) VALUES ('cleanup done');
+### Java
+package com.example.demo;
+
+import java.util.List;
+
+public class Main {
+    public static void main(String[] args) {
+        List<String> names = List.of("a", "b");
+        for (String n : names) {
+            System.out.println(n);
+        }
+    }
+}
+### Java
+@RestController
+@RequestMapping("/users")
+public class UserController {
+    @Autowired
+    private UserRepository repo;
+
+    @GetMapping("/{id}")
+    public User get(@PathVariable Long id) {
+        return repo.findById(id).orElseThrow();
+    }
+}
+### Java
+private static int fib(int n) {
+    if (n <= 1) return n;
+    return fib(n - 1) + fib(n - 2);
+}
+// usage
+ArrayList<Integer> list = new ArrayList<>();
+list.add(fib(10));
+### HTML/CSS
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Landing</title>
+</head>
+<body>
+  <div class="hero"><h1>Welcome</h1></div>
+</body>
+</html>
+### HTML/CSS
+.card {
+  display: flex;
+  margin: 0 auto;
+  padding: 16px;
+  background-color: #fafafa;
+  border-radius: 8px;
+}
+.card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+### HTML/CSS
+<ul class="nav">
+  <li><a href="/">Home</a></li>
+  <li><a href="/about">About</a></li>
+  <li><a href="/contact">Contact</a></li>
+</ul>
+### C
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char *argv[]) {
+    char *buf = malloc(64);
+    if (!buf) return 1;
+    printf("%d args\n", argc);
+    free(buf);
+    return 0;
+}
+### C
+typedef struct node {
+    int value;
+    struct node *next;
+} node_t;
+
+void push(node_t **head, int v) {
+    node_t *n = malloc(sizeof(node_t));
+    n->value = v;
+    n->next = *head;
+    *head = n;
+}
+### C
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+static int arr[10];
+void fill(int *p, size_t n) {
+    for (size_t i = 0; i < n; i++)
+        p[i] = (int)i;
+}
+### C++
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> v{1, 2, 3};
+    for (const auto& x : v)
+        std::cout << x << std::endl;
+    return 0;
+}
+### C++
+template <typename T>
+class Box {
+public:
+    explicit Box(T v) : value_(std::move(v)) {}
+    const T& get() const { return value_; }
+private:
+    T value_;
+};
+### C++
+namespace util {
+    std::string join(const std::vector<std::string>& parts, const std::string& sep) {
+        std::ostringstream oss;
+        auto it = parts.begin();
+        if (it != parts.end()) oss << *it++;
+        while (it != parts.end()) oss << sep << *it++;
+        return oss.str();
+    }
+}
+### Go
+package main
+
+import (
+	"fmt"
+	"net/http"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Hello, %s", r.URL.Path[1:])
+}
+
+func main() {
+	http.HandleFunc("/", handler)
+	http.ListenAndServe(":8080", nil)
+}
+### Go
+func (s *Server) Get(id int) (*User, error) {
+	u, ok := s.users[id]
+	if !ok {
+		return nil, fmt.Errorf("user %d not found", id)
+	}
+	return u, nil
+}
+### Go
+ch := make(chan int)
+go func() {
+	for i := 0; i < 5; i++ {
+		ch <- i
+	}
+	close(ch)
+}()
+for v := range ch {
+	fmt.Println(v)
+}
+### Rust
+use std::collections::HashMap;
+
+fn main() {
+    let mut map: HashMap<String, i32> = HashMap::new();
+    map.insert("a".to_string(), 1);
+    println!("{:?}", map);
+}
+### Rust
+#[derive(Debug, Clone)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Point {
+    pub fn dist(&self, o: &Point) -> f64 {
+        ((self.x - o.x).powi(2) + (self.y - o.y).powi(2)).sqrt()
+    }
+}
+### Rust
+fn read_file(path: &str) -> Result<String, std::io::Error> {
+    let s = std::fs::read_to_string(path)?;
+    match s.len() {
+        0 => Ok(String::new()),
+        _ => Ok(s),
+    }
+}
+### Bash
+#!/bin/bash
+set -e
+
+for f in *.log; do
+  if [ -f "$f" ]; then
+    echo "Compressing $f"
+    gzip "$f"
+  fi
+done
+### Bash
+sudo apt-get update && sudo apt-get install -y curl git
+export PATH="$HOME/bin:$PATH"
+cat access.log | grep "404" | awk '{print $1}' | sort | uniq -c
+### Bash
+backup() {
+  local dest=$1
+  tar -czf "$dest/backup-$(date +%F).tar.gz" /var/www
+  echo "done"
+}
+backup /mnt/disk
+### PowerShell
+Get-ChildItem -Path C:\Logs -Filter *.log |
+    Where-Object { $_.Length -gt 1MB } |
+    ForEach-Object { Remove-Item $_.FullName -Force }
+### PowerShell
+param(
+    [string]$Name = "World"
+)
+$greeting = "Hello, $Name"
+Write-Host $greeting
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+### PowerShell
+function Get-DiskInfo {
+    [CmdletBinding()]
+    param([string]$ComputerName)
+    Get-WmiObject Win32_LogicalDisk -ComputerName $ComputerName |
+        Select-Object DeviceID, FreeSpace
+}
+### PHP
+<?php
+$name = $_POST['name'] ?? 'guest';
+echo "Hello, " . htmlspecialchars($name);
+foreach ($items as $item) {
+    echo $item->title . "<br>";
+}
+?>
+### JSON
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+### YAML
+version: "3.8"
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    environment:
+      - DEBUG=false
+### XML
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <appSettings>
+    <add key="Timeout" value="30" />
+  </appSettings>
+</configuration>
+### Dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+EXPOSE 3000
+CMD ["node", "server.js"]
+### Markdown
+# Project Title
+
+A short description of the project.
+
+## Installation
+
+- Clone the repo
+- Run `npm install`
+
+See the [docs](https://example.com) for more.
+### Diğer
+The quick brown fox jumps over the lazy dog. This is just a note I wrote
+to remember that the meeting is on Thursday and we need to bring the
+printed reports with us.
+### Diğer
+Yarın saat üçte toplantı var, raporları yazdırmayı unutma. Ayrıca
+market alışverişi için liste hazırladım: süt, ekmek, yumurta.
+### Diğer
+[database]
+host = localhost
+port = 5432
+user = admin
+
+[logging]
+level = info

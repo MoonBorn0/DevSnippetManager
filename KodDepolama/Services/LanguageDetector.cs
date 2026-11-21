@@ -11,7 +11,7 @@ namespace DevSnippetManager.Services
         {
             const string other = "\u0044i\u011Fer";
             if (string.IsNullOrWhiteSpace(code)) return other;
-            var text = code.Trim();
+            var text = code.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Trim();
             var scores = LanguageCatalog.BuiltInLanguages.ToDictionary(x => x, _ => 0, StringComparer.Ordinal);
             void Add(string language, int points) => scores[language] += points;
             bool Has(string pattern, RegexOptions options = RegexOptions.Multiline) => Regex.IsMatch(text, pattern, options);

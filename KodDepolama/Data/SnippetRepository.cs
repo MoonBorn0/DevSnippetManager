@@ -2,7 +2,6 @@ using KodDepolama;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
-using System.Data.Common;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -10,6 +9,8 @@ namespace DevSnippetManager.Data
 {
     public class SnippetRepository : ISnippetRepository
     {
+        public const int MaxVersionsPerSnippet = 20;
+
         private readonly AppDbContext _context;
         private readonly string _databasePath;
 
@@ -25,6 +26,7 @@ namespace DevSnippetManager.Data
             {
                 await _context.Database.EnsureCreatedAsync();
                 await EnsureOrganizationColumnsAsync();
+                await EnsureSnippetVersionsTableAsync();
 
                 if (!await _context.Snippets.AnyAsync())
                     await SeedDatabaseAsync();
@@ -77,6 +79,31 @@ namespace DevSnippetManager.Data
             }
         }
 
+        private async Task EnsureSnippetVersionsTableAsync()
+        {
+            var connection = _context.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+                await connection.OpenAsync();
+
+            await using var createTable = connection.CreateCommand();
+            createTable.CommandText = @"
+CREATE TABLE IF NOT EXISTS ""SnippetVersions"" (
+    ""Id"" INTEGER NOT NULL CONSTRAINT ""PK_SnippetVersions"" PRIMARY KEY AUTOINCREMENT,
+    ""SnippetId"" INTEGER NOT NULL,
+    ""Title"" TEXT NOT NULL,
+    ""Language"" TEXT NOT NULL,
+    ""Tags"" TEXT NOT NULL,
+    ""Description"" TEXT NOT NULL,
+    ""Folder"" TEXT NOT NULL,
+    ""Code"" TEXT NOT NULL,
+    ""SavedAt"" TEXT NOT NULL,
+    ""CreatedAt"" TEXT NOT NULL,
+    CONSTRAINT ""FK_SnippetVersions_Snippets_SnippetId"" FOREIGN KEY (""SnippetId"") REFERENCES ""Snippets"" (""Id"") ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ""IX_SnippetVersions_SnippetId_SavedAt"" ON ""SnippetVersions"" (""SnippetId"", ""SavedAt"");";
+            await createTable.ExecuteNonQueryAsync();
+        }
+
         private async Task SeedDatabaseAsync()
         {
             try
@@ -97,13 +124,53 @@ namespace DevSnippetManager.Data
             return await _context.Snippets.OrderBy(s => s.Language).ThenBy(s => s.Title).ToListAsync();
         }
 
+        public async Task<IReadOnlyList<SnippetVersion>> GetVersionsAsync(int snippetId)
+        {
+            return await _context.SnippetVersions
+                .AsNoTracking()
+                .Where(v => v.SnippetId == snippetId)
+                .OrderByDescending(v => v.SavedAt)
+                .ThenByDescending(v => v.Id)
+                .ToListAsync();
+        }
+
         public async Task AddOrUpdateAsync(Snippet snippet)
         {
             try
             {
-                var existing = await _context.Snippets.FindAsync(snippet.Id);
+                Snippet? dbBefore = snippet.Id > 0
+                    ? await _context.Snippets.AsNoTracking().FirstOrDefaultAsync(s => s.Id == snippet.Id)
+                    : null;
+
+                var existing = snippet.Id > 0 ? await _context.Snippets.FindAsync(snippet.Id) : null;
                 if (existing != null)
                 {
+                    if (dbBefore != null && HasContentChanged(dbBefore, snippet))
+                    {
+                        var version = new SnippetVersion
+                        {
+                            SnippetId = dbBefore.Id,
+                            Title = dbBefore.Title ?? string.Empty,
+                            Language = dbBefore.Language ?? string.Empty,
+                            Tags = dbBefore.Tags ?? string.Empty,
+                            Description = dbBefore.Description ?? string.Empty,
+                            Folder = dbBefore.Folder ?? string.Empty,
+                            Code = dbBefore.Code ?? string.Empty,
+                            SavedAt = dbBefore.UpdatedAt,
+                            CreatedAt = DateTime.Now
+                        };
+                        await _context.SnippetVersions.AddAsync(version);
+
+                        var overflow = await _context.SnippetVersions
+                            .Where(v => v.SnippetId == dbBefore.Id)
+                            .OrderByDescending(v => v.SavedAt)
+                            .ThenByDescending(v => v.Id)
+                            .Skip(MaxVersionsPerSnippet - 1)
+                            .ToListAsync();
+                        if (overflow.Count > 0)
+                            _context.SnippetVersions.RemoveRange(overflow);
+                    }
+
                     _context.Entry(existing).CurrentValues.SetValues(snippet);
                 }
                 else
@@ -111,6 +178,7 @@ namespace DevSnippetManager.Data
                     snippet.Id = 0;
                     await _context.Snippets.AddAsync(snippet);
                 }
+
                 await _context.SaveChangesAsync();
             }
             catch
@@ -118,6 +186,16 @@ namespace DevSnippetManager.Data
                 _context.ChangeTracker.Clear();
                 throw;
             }
+        }
+
+        private static bool HasContentChanged(Snippet before, Snippet after)
+        {
+            return !string.Equals(before.Title ?? string.Empty, after.Title ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(before.Language ?? string.Empty, after.Language ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(before.Tags ?? string.Empty, after.Tags ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(before.Description ?? string.Empty, after.Description ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(before.Folder ?? string.Empty, after.Folder ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(before.Code ?? string.Empty, after.Code ?? string.Empty, StringComparison.Ordinal);
         }
 
         public async Task UpdateMetadataAsync(Snippet snippet)
@@ -176,6 +254,10 @@ namespace DevSnippetManager.Data
             await using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                var allVersions = await _context.SnippetVersions.ToListAsync();
+                if (allVersions.Count > 0)
+                    _context.SnippetVersions.RemoveRange(allVersions);
+
                 var all = await _context.Snippets.ToListAsync();
                 _context.Snippets.RemoveRange(all);
                 await _context.Snippets.AddRangeAsync(snippets);
@@ -205,6 +287,12 @@ namespace DevSnippetManager.Data
                 var existing = await _context.Snippets.FindAsync(snippet.Id);
                 if (existing != null)
                 {
+                    var versions = await _context.SnippetVersions
+                        .Where(v => v.SnippetId == existing.Id)
+                        .ToListAsync();
+                    if (versions.Count > 0)
+                        _context.SnippetVersions.RemoveRange(versions);
+
                     _context.Snippets.Remove(existing);
                     await _context.SaveChangesAsync();
                 }
@@ -220,6 +308,10 @@ namespace DevSnippetManager.Data
         {
             try
             {
+                var allVersions = await _context.SnippetVersions.ToListAsync();
+                if (allVersions.Count > 0)
+                    _context.SnippetVersions.RemoveRange(allVersions);
+
                 var all = await _context.Snippets.ToListAsync();
                 _context.Snippets.RemoveRange(all);
                 await _context.SaveChangesAsync();
