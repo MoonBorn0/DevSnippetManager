@@ -336,6 +336,7 @@ namespace DevSnippetManager.ViewModels
 
         private async Task LoadDataAsync()
         {
+            await ProjectScan.WaitForActiveScanWorkAsync();
             _allSnippets = (await _repository.GetAllAsync()).ToList();
             RebuildOrganizationLists();
             FilterList();
@@ -1092,6 +1093,7 @@ namespace DevSnippetManager.ViewModels
             snippet.Code = code;
             snippet.UpdatedAt = DateTime.Now;
 
+            await ProjectScan.WaitForActiveScanWorkAsync();
             await _repository.AddOrUpdateAsync(snippet);
 
             if (!knownLanguage)
@@ -1158,6 +1160,7 @@ namespace DevSnippetManager.ViewModels
                 _suppressUnsavedCheck = true;
                 try
                 {
+                    await ProjectScan.WaitForActiveScanWorkAsync();
                     await _repository.DeleteAsync(SelectedSnippet);
                     _editingSnippet = null;
                     await LoadDataAsync();

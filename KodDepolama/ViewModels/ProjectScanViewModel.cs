@@ -22,6 +22,9 @@ namespace DevSnippetManager.ViewModels
         private readonly ISnippetRepository _repository;
         private readonly ProjectScanService _scanService;
         private CancellationTokenSource? _scanCts;
+        private Task? _activeScanWorkTask;
+
+        public Task WaitForActiveScanWorkAsync() => _activeScanWorkTask ?? Task.CompletedTask;
 
         public ObservableCollection<ScannedProject> ScannedProjects { get; } = new();
 
@@ -181,7 +184,17 @@ namespace DevSnippetManager.ViewModels
             try
             {
                 var token = _scanCts.Token;
-                var summaries = await Task.Run(() => work(progress, token), token);
+                var workTask = Task.Run(() => work(progress, token), token);
+                _activeScanWorkTask = workTask;
+                IReadOnlyList<ScanSummary> summaries;
+                try
+                {
+                    summaries = await workTask;
+                }
+                finally
+                {
+                    _activeScanWorkTask = null;
+                }
                 var hadUnsaved = hadUnsavedAtStart || _main.HasUnsavedChanges;
                 await _main.RefreshAfterScanAsync(hadUnsaved);
 

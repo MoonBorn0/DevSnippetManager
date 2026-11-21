@@ -169,7 +169,6 @@ public sealed class ProjectScanService
 
         var totalFiles = filesByRoot.Values.Sum(set => set.Count);
         var doneFiles = 0;
-        var summaries = new List<ScanSummary>();
 
         var scannedByRoot = await Task.Run(() =>
         {
@@ -227,17 +226,22 @@ public sealed class ProjectScanService
         ct.ThrowIfCancellationRequested();
 
         var now = DateTime.Now;
-        foreach (var (root, folder, scannedFiles) in scannedByRoot)
+        var summaries = await Task.Run(async () =>
         {
-            ct.ThrowIfCancellationRequested();
-            var existingForRoot = allSnippets
-                .Where(s => s.IsFromSource && !string.IsNullOrWhiteSpace(s.SourceRoot) && ProjectLocator.PathEquals(s.SourceRoot, root))
-                .ToList();
+            var list = new List<ScanSummary>(scannedByRoot.Count);
+            foreach (var (root, folder, scannedFiles) in scannedByRoot)
+            {
+                ct.ThrowIfCancellationRequested();
+                var existingForRoot = allSnippets
+                    .Where(s => s.IsFromSource && !string.IsNullOrWhiteSpace(s.SourceRoot) && ProjectLocator.PathEquals(s.SourceRoot, root))
+                    .ToList();
 
-            var plan = ScanReconciler.Reconcile(root, folder, scannedFiles, existingForRoot, now);
-            var applyResult = await _repository.ApplyScanAsync(plan);
-            summaries.Add(new ScanSummary(folder, root, applyResult, plan.SkippedFiles));
-        }
+                var plan = ScanReconciler.Reconcile(root, folder, scannedFiles, existingForRoot, now);
+                var applyResult = await _repository.ApplyScanAsync(plan).ConfigureAwait(false);
+                list.Add(new ScanSummary(folder, root, applyResult, plan.SkippedFiles));
+            }
+            return list;
+        }, ct).ConfigureAwait(false);
 
         return summaries;
     }
@@ -299,9 +303,12 @@ public sealed class ProjectScanService
 
         ct.ThrowIfCancellationRequested();
 
-        var plan = ScanReconciler.Reconcile(normalizedRoot, folder, scannedFiles, existingForRoot, DateTime.Now);
-        var applyResult = await _repository.ApplyScanAsync(plan);
-        return new ScanSummary(folder, normalizedRoot, applyResult, plan.SkippedFiles);
+        return await Task.Run(async () =>
+        {
+            var plan = ScanReconciler.Reconcile(normalizedRoot, folder, scannedFiles, existingForRoot, DateTime.Now);
+            var applyResult = await _repository.ApplyScanAsync(plan).ConfigureAwait(false);
+            return new ScanSummary(folder, normalizedRoot, applyResult, plan.SkippedFiles);
+        }, ct).ConfigureAwait(false);
     }
 
     public IReadOnlyList<ScannedProject> GetScannedProjects(IEnumerable<Snippet> all)

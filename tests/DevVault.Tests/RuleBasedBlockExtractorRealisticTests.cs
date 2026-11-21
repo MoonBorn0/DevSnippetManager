@@ -550,4 +550,103 @@ public class RuleBasedBlockExtractorRealisticTests
         Assert.Equal("mul", block.Symbol);
         Assert.Equal("İki sayıyı çarpar.\n- x: Birinci sayı\n- y: İkinci sayı\nDöndürür: Çarpım sonucu", block.Comment);
     }
+
+    [Fact]
+    public void Realistic_Tsx_TodoListTsx_HandlesClosingAndSelfClosingTags()
+    {
+        var result = _extractor.Extract(ReadRealistic("TodoList.tsx"), "TypeScript");
+        Assert.False(result.HasErrors);
+        Assert.Equal(
+            new[] { "TodoItem", "useTodos", "TodoList", "EmptyBadge" },
+            result.Blocks.Select(b => b.Symbol));
+
+        var list = GetBlock(result, "TodoList");
+        Assert.StartsWith("export function TodoList", list.Code);
+        Assert.EndsWith("}", list.Code);
+        Assert.Contains("</li>", list.Code);
+        Assert.Contains("<EmptyBadge />", list.Code);
+
+        var badge = GetBlock(result, "EmptyBadge");
+        Assert.StartsWith("export const EmptyBadge", badge.Code);
+        Assert.EndsWith("};", badge.Code);
+    }
+
+    [Fact]
+    public void Realistic_Jsx_TodoCardJsx_HandlesClosingAndSelfClosingTags()
+    {
+        var result = _extractor.Extract(ReadRealistic("TodoCard.jsx"), "JavaScript");
+        Assert.False(result.HasErrors);
+        Assert.Equal(
+            new[] { "TodoCard", "UrgentIcon" },
+            result.Blocks.Select(b => b.Symbol));
+
+        var card = GetBlock(result, "TodoCard");
+        Assert.StartsWith("export function TodoCard", card.Code);
+        Assert.EndsWith("}", card.Code);
+        Assert.Contains("<UrgentIcon />", card.Code);
+        Assert.Contains("</li>", card.Code);
+
+        var icon = GetBlock(result, "UrgentIcon");
+        Assert.StartsWith("export const UrgentIcon", icon.Code);
+        Assert.EndsWith("};", icon.Code);
+    }
+
+    [Fact]
+    public void Java_SpringControllerAnnotationsDoNotStealSymbolName()
+    {
+        const string java = """
+            package com.example.api;
+
+            import org.springframework.web.bind.annotation.*;
+
+            @RestController
+            @RequestMapping("/api/users")
+            public class UserController {
+                private final UserService service;
+
+                public UserController(UserService service) {
+                    this.service = service;
+                    System.out.println("init");
+                }
+
+                @GetMapping("/{id}")
+                public ResponseEntity<User> get(@PathVariable Long id) {
+                    User u = service.find(id);
+                    return ResponseEntity.ok(u);
+                }
+
+                @PostMapping(value = "", consumes = "application/json")
+                public ResponseEntity<User> create(@RequestBody @Valid UserDto dto) {
+                    User saved = service.save(dto);
+                    return ResponseEntity.ok(saved);
+                }
+
+                @DeleteMapping("/{id}")
+                public void delete(@PathVariable("id") Long id) {
+                    service.remove(id);
+                    System.out.println("deleted");
+                }
+            }
+            """;
+
+        var result = _extractor.Extract(java, "Java");
+        Assert.False(result.HasErrors);
+        Assert.Equal(
+            new[]
+            {
+                "UserController.UserController",
+                "UserController.get",
+                "UserController.create",
+                "UserController.delete"
+            },
+            result.Blocks.Select(b => b.Symbol));
+
+        var get = GetBlock(result, "UserController.get");
+        Assert.StartsWith("@GetMapping(\"/{id}\")", get.Code);
+        Assert.EndsWith("}", get.Code);
+
+        var create = GetBlock(result, "UserController.create");
+        Assert.StartsWith("@PostMapping", create.Code);
+        Assert.EndsWith("}", create.Code);
+    }
 }

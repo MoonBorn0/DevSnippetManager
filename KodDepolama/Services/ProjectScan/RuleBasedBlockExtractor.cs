@@ -427,6 +427,12 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             return false;
 
         var collapsed = Regex.Replace(header, @"\s+", " ").Trim();
+        if (string.Equals(language, "Java", StringComparison.OrdinalIgnoreCase))
+        {
+            collapsed = StripJavaAnnotations(collapsed);
+            if (string.IsNullOrWhiteSpace(collapsed))
+                return false;
+        }
 
         // PowerShell
         if (string.Equals(language, "PowerShell", StringComparison.OrdinalIgnoreCase))
@@ -805,6 +811,44 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         }
 
         return false;
+    }
+
+    private static string StripJavaAnnotations(string text)
+    {
+        if (!text.Contains('@', StringComparison.Ordinal))
+            return text;
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        var i = 0;
+        var len = text.Length;
+        while (i < len)
+        {
+            if (text[i] == '@' && i + 1 < len && (char.IsLetter(text[i + 1]) || text[i + 1] == '_'))
+            {
+                i++;
+                while (i < len && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '.'))
+                    i++;
+                var ws = i;
+                while (ws < len && char.IsWhiteSpace(text[ws]))
+                    ws++;
+                if (ws < len && text[ws] == '(')
+                {
+                    var depth = 1;
+                    i = ws + 1;
+                    while (i < len && depth > 0)
+                    {
+                        if (text[i] == '(') depth++;
+                        else if (text[i] == ')') depth--;
+                        i++;
+                    }
+                }
+                sb.Append(' ');
+                continue;
+            }
+            sb.Append(text[i++]);
+        }
+
+        return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
     }
 
     private static void ExtractPythonRange(

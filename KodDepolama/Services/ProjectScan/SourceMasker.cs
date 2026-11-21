@@ -677,7 +677,7 @@ public static class SourceMasker
                 continue;
             }
 
-            if (isJsTs && c == '/' && CanStartJsRegex(chars, i))
+            if (isJsTs && c == '/' && !(i + 1 < len && source[i + 1] == '>') && CanStartJsRegex(chars, i))
             {
                 var start = i;
                 var scan = i + 1;
@@ -740,7 +740,9 @@ public static class SourceMasker
             return true;
 
         var prev = maskedSoFar[j];
-        if (prev is '(' or '[' or '{' or ',' or ';' or '=' or ':' or '!' or '?' or '&' or '|' or '~' or '+' or '-' or '*' or '%' or '<' or '>' or '^')
+        if (prev == '<')
+            return false;
+        if (prev is '(' or '[' or '{' or ',' or ';' or '=' or ':' or '!' or '?' or '&' or '|' or '~' or '+' or '-' or '*' or '%' or '>' or '^')
             return true;
 
         if (char.IsLetterOrDigit(prev) || prev == '_' || prev == '$')
