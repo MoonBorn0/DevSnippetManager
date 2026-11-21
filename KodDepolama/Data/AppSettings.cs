@@ -27,6 +27,7 @@ namespace DevSnippetManager.Data
         }
         public int BackupIntervalHours { get; set; } = 24;
         public int MaxBackups { get; set; } = 10;
+        public bool MinimizeToTray { get; set; } = true;
         public DateTime? LastBackupAt { get; set; }
         public List<string> CustomLanguages { get; set; } = new List<string>();
 
@@ -68,6 +69,7 @@ namespace DevSnippetManager.Data
                     BackupFolder = _backupFolder,
                     BackupIntervalHours,
                     MaxBackups,
+                    MinimizeToTray,
                     LastBackupAt,
                     CustomLanguages
                 };

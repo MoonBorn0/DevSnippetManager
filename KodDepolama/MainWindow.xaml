@@ -226,25 +226,41 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
 
-                    <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,12,0,0" HorizontalAlignment="Center">
-                        <Button Command="{Binding NewSnippetCommand}" Margin="0,0,6,0" ToolTip="Yeni Ekle">
-                            <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Plus" Margin="0,0,4,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Yeni" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Button>
-                        <Button Command="{Binding ImportCommand}" Margin="0,0,6,0" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="İçe Aktar">
-                            <materialDesign:PackIcon Kind="FileImportOutline" />
-                        </Button>
-                        <Button Command="{Binding ExportCommand}" Margin="0,0,6,0" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Dışa Aktar">
-                            <materialDesign:PackIcon Kind="FileExportOutline" />
-                        </Button>
-                        <Button Command="{Binding BackupNowCommand}" Margin="0,0,6,0" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Şimdi yedek al">
-                            <materialDesign:PackIcon Kind="BackupRestore" />
-                        </Button>
-                        <Button Command="{Binding OpenBackupFolderCommand}" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Yedek klasörünü aç">
-                            <materialDesign:PackIcon Kind="FolderOpenOutline" />
-                        </Button>
+                    <StackPanel Grid.Row="5" Margin="0,12,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Command="{Binding NewSnippetCommand}" Padding="8,0" ToolTip="Yeni Ekle">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <materialDesign:PackIcon Kind="Plus" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Yeni" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2" Command="{Binding NewFromClipboardCommand}" Padding="8,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Panodan yeni snippet (Ctrl+Shift+V)">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <materialDesign:PackIcon Kind="ClipboardArrowDownOutline" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Panodan" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+
+                        <UniformGrid Columns="4" Margin="-3,8,-3,0">
+                            <Button Command="{Binding ImportCommand}" Margin="3,0" Padding="0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="İçe Aktar">
+                                <materialDesign:PackIcon Kind="FileImportOutline" />
+                            </Button>
+                            <Button Command="{Binding ExportCommand}" Margin="3,0" Padding="0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Dışa Aktar">
+                                <materialDesign:PackIcon Kind="FileExportOutline" />
+                            </Button>
+                            <Button Command="{Binding BackupNowCommand}" Margin="3,0" Padding="0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Şimdi yedek al">
+                                <materialDesign:PackIcon Kind="BackupRestore" />
+                            </Button>
+                            <Button Command="{Binding OpenBackupFolderCommand}" Margin="3,0" Padding="0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Yedek klasörünü aç">
+                                <materialDesign:PackIcon Kind="FolderOpenOutline" />
+                            </Button>
+                        </UniformGrid>
                     </StackPanel>
                 </Grid>
             </materialDesign:Card>

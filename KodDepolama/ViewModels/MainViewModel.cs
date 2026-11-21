@@ -39,6 +39,12 @@ namespace DevSnippetManager.ViewModels
         private readonly CultureInfo _turkish = new("tr-TR");
 
         public ISnackbarMessageQueue MessageQueue { get; } = new SnackbarMessageQueue(TimeSpan.FromSeconds(2));
+        public AppSettings Settings => _settings;
+
+        public void SaveSettings()
+        {
+            _settings.Save();
+        }
 
         [ObservableProperty]
         private ObservableCollection<Snippet> _filteredSnippets = new();
@@ -106,6 +112,8 @@ namespace DevSnippetManager.ViewModels
         public Action<string>? UpdateEditorCodeAction { get; set; }
         public Action<string>? UpdateEditorLanguageAction { get; set; }
         public Func<Task<string>>? GetEditorCodeFunc { get; set; }
+        public Func<IReadOnlyList<TemplateVariable>, Task<IReadOnlyDictionary<string, string>?>>? RequestTemplateValuesFunc { get; set; }
+        public IReadOnlyList<Snippet> AllSnippets => _allSnippets;
 
         public MainViewModel()
         {
@@ -391,21 +399,32 @@ namespace DevSnippetManager.ViewModels
                     .Distinct(StringComparer.Create(_turkish, true))
                     .Any(tag => StringComparer.Create(_turkish, true).Equals(selected, tag))));
 
-            if (!string.IsNullOrWhiteSpace(SearchText))
-                query = query.Where(s => (s.Title?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                                         (s.Tags?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                                         (s.Description?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                                          (s.Folder?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                                         (s.Code?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false));
-
-            IOrderedEnumerable<Snippet> ordered = query.OrderByDescending(s => s.IsFavorite);
-            ordered = SelectedSortOption switch
+            var inMemoryQuery = query.ToList();
+            var isSearching = !string.IsNullOrWhiteSpace(SearchText);
+            IEnumerable<Snippet> ordered;
+            if (isSearching)
             {
-                "Son güncellenen" => ordered.ThenByDescending(s => s.UpdatedAt),
-                "En yeni" => ordered.ThenByDescending(s => s.CreatedAt),
-                "En çok kullanılan" => ordered.ThenByDescending(s => s.UsageCount).ThenByDescending(s => s.LastUsedAt).ThenBy(s => s.Title, StringComparer.Create(_turkish, true)),
-                _ => ordered.ThenBy(s => s.Title, StringComparer.Create(_turkish, true))
-            };
+                var scored = inMemoryQuery
+                    .Select(s => (Snippet: s, Score: GetSearchScore(s, SearchText)))
+                    .Where(x => x.Score.HasValue)
+                    .ToList();
+                ordered = scored
+                    .OrderByDescending(x => x.Score!.Value)
+                    .ThenByDescending(x => x.Snippet.IsFavorite)
+                    .ThenBy(x => x.Snippet.Title, StringComparer.Create(_turkish, true))
+                    .Select(x => x.Snippet);
+            }
+            else
+            {
+                var favoriteOrdered = inMemoryQuery.OrderByDescending(s => s.IsFavorite);
+                ordered = SelectedSortOption switch
+                {
+                    "Son güncellenen" => favoriteOrdered.ThenByDescending(s => s.UpdatedAt),
+                    "En yeni" => favoriteOrdered.ThenByDescending(s => s.CreatedAt),
+                    "En çok kullanılan" => favoriteOrdered.ThenByDescending(s => s.UsageCount).ThenByDescending(s => s.LastUsedAt).ThenBy(s => s.Title, StringComparer.Create(_turkish, true)),
+                    _ => favoriteOrdered.ThenBy(s => s.Title, StringComparer.Create(_turkish, true))
+                };
+            }
             var filtered = ordered.ToList();
             
             var previousSuppressEditorReload = _suppressEditorReload;
@@ -431,6 +450,12 @@ namespace DevSnippetManager.ViewModels
         {
             if (!ConfirmDiscardChanges())
                 return;
+
+            BeginNewSnippet();
+        }
+
+        private void BeginNewSnippet()
+        {
 
             _suppressUnsavedCheck = true;
             try
@@ -475,20 +500,101 @@ namespace DevSnippetManager.ViewModels
 
         public void MarkCodeChanged() => IsCodeModified = true;
 
+        private static int? GetSearchScore(Snippet snippet, string searchText)
+        {
+            var title = FuzzyMatcher.Match(searchText, snippet.Title ?? string.Empty);
+            var tags = FuzzyMatcher.Match(searchText, snippet.Tags ?? string.Empty);
+            var folder = FuzzyMatcher.Match(searchText, snippet.Folder ?? string.Empty);
+            var fieldScore = Math.Max(tags?.Score ?? 0, folder?.Score ?? 0);
+            var fuzzyScore = Math.Max((title?.Score ?? 0) * 3, fieldScore);
+            if (fuzzyScore > 0) return fuzzyScore;
+            return (snippet.Description?.Contains(searchText, StringComparison.OrdinalIgnoreCase) == true ||
+                    snippet.Code?.Contains(searchText, StringComparison.OrdinalIgnoreCase) == true) ? 10 : null;
+        }
+
+        public bool TrySelectSnippet(Snippet snippet)
+        {
+            var target = _allSnippets.FirstOrDefault(s => ReferenceEquals(s, snippet) || (snippet.Id != 0 && s.Id == snippet.Id));
+            if (target == null) return false;
+
+            var isCurrentSnippet = ReferenceEquals(target, SelectedSnippet) || ReferenceEquals(target, _editingSnippet);
+            if (isCurrentSnippet)
+            {
+                if (!HasUnsavedChanges)
+                    return true;
+                if (!ConfirmDiscardChanges())
+                    return false;
+
+                _suppressEditorReload = true;
+                try
+                {
+                    _editingSnippet = target;
+                    EditTitle = target.Title;
+                    EditTags = target.Tags;
+                    EditLanguage = string.IsNullOrWhiteSpace(target.Language) ? "DiÄŸer" : target.Language;
+                    EditDescription = target.Description;
+                    if (string.IsNullOrWhiteSpace(target.Language))
+                        EditLanguage = "\u0044i\u011Fer";
+                    EditFolder = target.Folder ?? string.Empty;
+                    EditIsFavorite = target.IsFavorite;
+                    IsCodeModified = false;
+                    UpdateEditorCodeAction?.Invoke(target.Code);
+                }
+                finally
+                {
+                    _suppressEditorReload = false;
+                }
+                return true;
+            }
+
+            if (!ConfirmDiscardChanges()) return false;
+            SearchText = string.Empty;
+            SelectedLanguageFilter = "Tüm diller";
+            SelectedFolderFilter = "Tüm klasörler";
+            foreach (var tag in TagFilters) tag.IsSelected = false;
+            HasTagFilter = false;
+            FilterList();
+            _suppressUnsavedCheck = true;
+            try { SelectedSnippet = target; }
+            finally { _suppressUnsavedCheck = false; }
+            return ReferenceEquals(SelectedSnippet, target);
+        }
+
         [RelayCommand]
         private async Task CopySnippetAsync()
         {
             var code = GetEditorCodeFunc != null ? await GetEditorCodeFunc() : string.Empty;
+            var target = _editingSnippet ?? new Snippet { Code = code };
+            await CopySnippetToClipboardAsync(target, code);
+        }
+
+        public async Task<bool> CopySnippetToClipboardAsync(Snippet snippet, string? codeOverride = null)
+        {
+            var code = codeOverride ?? snippet.Code;
             if (string.IsNullOrEmpty(code))
             {
                 MessageQueue.Enqueue("Kopyalanacak kod yok");
-                return;
+                return false;
+            }
+
+            var variables = TemplateService.Parse(code);
+            if (variables.Count > 0)
+            {
+                var values = RequestTemplateValuesFunc == null
+                    ? variables.ToDictionary(v => v.Name, v => v.DefaultValue, StringComparer.Ordinal)
+                    : await RequestTemplateValuesFunc(variables);
+                if (values == null)
+                {
+                    MessageQueue.Enqueue("Kopyalama iptal edildi");
+                    return false;
+                }
+                code = TemplateService.Fill(code, values);
             }
 
             try
             {
                 System.Windows.Clipboard.SetText(code);
-                var usedSnippet = _editingSnippet;
+                var usedSnippet = snippet;
                 if (usedSnippet != null && usedSnippet.Id != 0)
                 {
                     var originalUsageCount = usedSnippet.UsageCount;
@@ -509,11 +615,62 @@ namespace DevSnippetManager.ViewModels
                     }
                 }
                 MessageQueue.Enqueue("Kod panoya kopyalandı");
+                return true;
             }
             catch (Exception)
             {
                 MessageQueue.Enqueue("Panoya kopyalanamadı");
+                return false;
             }
+        }
+
+        [RelayCommand]
+        private async Task NewFromClipboardAsync()
+        {
+            string text;
+            try { text = System.Windows.Clipboard.ContainsText() ? System.Windows.Clipboard.GetText() : string.Empty; }
+            catch { text = string.Empty; }
+            if (string.IsNullOrWhiteSpace(text)) { MessageQueue.Enqueue("Panoda metin yok"); return; }
+            if (!ConfirmDiscardChanges()) return;
+
+            BeginNewSnippet();
+            UpdateEditorCodeAction?.Invoke(text);
+            EditLanguage = LanguageDetector.Detect(text);
+            var lines = text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+            string CleanTitleLine(string line)
+            {
+                var result = line.Trim();
+                while (result.Length > 0)
+                {
+                    var before = result;
+                    result = System.Text.RegularExpressions.Regex.Replace(result, @"(\*/|-->)\s*$", string.Empty).Trim();
+                    if (result.StartsWith("///", StringComparison.Ordinal)) result = result[3..].Trim();
+                    else if (result.StartsWith("//", StringComparison.Ordinal)) result = result[2..].Trim();
+                    else if (result.StartsWith("/**", StringComparison.Ordinal)) result = result[3..].Trim();
+                    else if (result.StartsWith("/*", StringComparison.Ordinal)) result = result[2..].Trim();
+                    else if (result.StartsWith("*", StringComparison.Ordinal)) result = result[1..].Trim();
+                    else if (result.StartsWith("#!", StringComparison.Ordinal)) result = result[2..].Trim();
+                    else if (result.StartsWith("#", StringComparison.Ordinal) && !result.StartsWith("#include", StringComparison.OrdinalIgnoreCase) && !result.StartsWith("#define", StringComparison.OrdinalIgnoreCase) && !result.StartsWith("#region", StringComparison.OrdinalIgnoreCase)) result = result[1..].Trim();
+                    else if (result.StartsWith("--", StringComparison.Ordinal)) result = result[2..].Trim();
+                    else if (result.StartsWith("<!--", StringComparison.Ordinal)) result = result[4..].Trim();
+                    else if (result.StartsWith(";", StringComparison.Ordinal) || result.StartsWith("'", StringComparison.Ordinal)) result = result[1..].Trim();
+                    if (result == before) break;
+                }
+                return result.Trim();
+            }
+
+            var firstLine = string.Empty;
+            foreach (var line in lines.Where(line => !string.IsNullOrWhiteSpace(line)))
+            {
+                firstLine = CleanTitleLine(line);
+                if (firstLine.Length > 0) break;
+            }
+            if (firstLine.Length == 0) firstLine = "Yeni snippet";
+            EditTitle = firstLine.Length > 60 ? firstLine[..59] + "…" : firstLine;
+            IsCodeModified = true;
+            if (firstLine.Length > 60)
+                EditTitle = firstLine[..59] + "\u2026";
+            MessageQueue.Enqueue($"Panodan yeni snippet oluşturuldu (dil: {EditLanguage})");
         }
 
         [RelayCommand]

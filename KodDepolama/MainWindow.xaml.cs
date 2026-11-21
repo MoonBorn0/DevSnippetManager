@@ -1,15 +1,19 @@
-using DevSnippetManager.ViewModels;
 using DevSnippetManager.Services;
+using DevSnippetManager.ViewModels;
+using DevSnippetManager.Views;
+using Microsoft.Web.WebView2.Core;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
-using Microsoft.Web.WebView2.Core;
+using Drawing = System.Drawing;
+using WinForms = System.Windows.Forms;
 
 namespace KodDepolama
 {
@@ -22,14 +26,22 @@ namespace KodDepolama
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
         private const int HOTKEY_ID = 9000;
+        private const int HOTKEY_QUICK_SEARCH_ID = 9001;
         private const uint MOD_CONTROL = 0x0002;
         private const uint MOD_SHIFT = 0x0004;
         private const uint VK_S = 0x53; // 'S' key
+        private const uint VK_SPACE = 0x20; // Space key
 
         private MainViewModel _viewModel;
         private bool _editorReady;
         private string _pendingEditorCode = string.Empty;
         private string _pendingEditorLanguage = "csharp";
+
+        private WinForms.NotifyIcon? _notifyIcon;
+        private Drawing.Icon? _extractedTrayIcon;
+        private QuickSearchWindow? _quickSearchWindow;
+        private bool _isExiting;
+        private bool _trayBalloonShown;
 
         public MainWindow()
         {
@@ -65,7 +77,161 @@ namespace KodDepolama
                 return string.Empty;
             };
 
+            _viewModel.RequestTemplateValuesFunc = RequestTemplateValuesAsync;
+
+            InitializeTrayIcon();
             InitializeAsync();
+        }
+
+        private void InitializeTrayIcon()
+        {
+            Drawing.Icon icon = Drawing.SystemIcons.Application;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(Environment.ProcessPath))
+                {
+                    _extractedTrayIcon = Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath);
+                    if (_extractedTrayIcon != null)
+                    {
+                        icon = _extractedTrayIcon;
+                    }
+                }
+            }
+            catch
+            {
+                // Fall back to default application icon
+            }
+
+            var menu = new WinForms.ContextMenuStrip();
+            menu.Items.Add("Aç", null, (_, _) => Dispatcher.Invoke(ShowAndActivateMainWindow));
+            menu.Items.Add("Yeni snippet", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                ShowAndActivateMainWindow();
+                _viewModel.NewSnippetCommand.Execute(null);
+            }));
+            menu.Items.Add("Panodan yeni snippet", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                ShowAndActivateMainWindow();
+                _viewModel.NewFromClipboardCommand.Execute(null);
+            }));
+            menu.Items.Add("Hızlı ara (Ctrl+Shift+Space)", null, (_, _) => Dispatcher.Invoke(ToggleQuickSearch));
+            menu.Items.Add(new WinForms.ToolStripSeparator());
+
+            var minimizeItem = new WinForms.ToolStripMenuItem("Kapatınca tepsiye küçült")
+            {
+                CheckOnClick = true,
+                Checked = _viewModel.Settings.MinimizeToTray
+            };
+            minimizeItem.CheckedChanged += (_, _) =>
+            {
+                _viewModel.Settings.MinimizeToTray = minimizeItem.Checked;
+                _viewModel.SaveSettings();
+            };
+            menu.Items.Add(minimizeItem);
+            menu.Items.Add(new WinForms.ToolStripSeparator());
+            menu.Items.Add("Çıkış", null, (_, _) => Dispatcher.Invoke(ExitApplication));
+
+            _notifyIcon = new WinForms.NotifyIcon
+            {
+                Icon = icon,
+                Text = "DevVault",
+                ContextMenuStrip = menu,
+                Visible = true
+            };
+            _notifyIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ShowAndActivateMainWindow);
+        }
+
+        private void ShowAndActivateMainWindow()
+        {
+            if (!IsVisible)
+            {
+                Show();
+            }
+
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+
+            Activate();
+            Topmost = true;
+            Topmost = false;
+            Focus();
+        }
+
+        private void ToggleQuickSearch()
+        {
+            _quickSearchWindow ??= new QuickSearchWindow(_viewModel, snippet =>
+            {
+                ShowAndActivateMainWindow();
+                _viewModel.TrySelectSnippet(snippet);
+            });
+
+            if (_quickSearchWindow.IsVisible)
+            {
+                _quickSearchWindow.Hide();
+            }
+            else
+            {
+                _quickSearchWindow.ShowAndFocus();
+            }
+        }
+
+        private Task<IReadOnlyDictionary<string, string>?> RequestTemplateValuesAsync(IReadOnlyList<TemplateVariable> variables)
+        {
+            return Dispatcher.Invoke(() =>
+            {
+                var dialog = new TemplateVariablesWindow(variables);
+                var quickSearchVisible = _quickSearchWindow != null && _quickSearchWindow.IsVisible;
+
+                if (quickSearchVisible)
+                {
+                    _quickSearchWindow!.SuppressDeactivateHide = true;
+                    dialog.Owner = _quickSearchWindow;
+                    dialog.Topmost = _quickSearchWindow.Topmost;
+                    dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                }
+                else if (IsVisible)
+                {
+                    dialog.Owner = this;
+                    dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                }
+                else
+                {
+                    dialog.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                    dialog.Topmost = true;
+                }
+
+                try
+                {
+                    var accepted = dialog.ShowDialog() == true;
+                    return Task.FromResult<IReadOnlyDictionary<string, string>?>(accepted ? dialog.ResultValues : null);
+                }
+                finally
+                {
+                    if (quickSearchVisible && _quickSearchWindow != null)
+                    {
+                        _quickSearchWindow.SuppressDeactivateHide = false;
+                    }
+                }
+            });
+        }
+
+        public void PrepareForExit()
+        {
+            _isExiting = true;
+        }
+
+        private void ExitApplication()
+        {
+            if (!_viewModel.ConfirmDiscardChanges())
+            {
+                return;
+            }
+
+            _isExiting = true;
+            Close();
+            System.Windows.Application.Current.Shutdown();
         }
 
         private async void InitializeAsync()
@@ -142,30 +308,81 @@ namespace KodDepolama
             IntPtr handle = new WindowInteropHelper(this).Handle;
             HwndSource source = HwndSource.FromHwnd(handle);
             source.AddHook(HwndHook);
-            RegisterHotKey(handle, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, VK_S);
+
+            var failedHotkeys = new List<string>();
+            if (!RegisterHotKey(handle, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, VK_S))
+            {
+                failedHotkeys.Add("Ctrl+Shift+S");
+            }
+            if (!RegisterHotKey(handle, HOTKEY_QUICK_SEARCH_ID, MOD_CONTROL | MOD_SHIFT, VK_SPACE))
+            {
+                failedHotkeys.Add("Ctrl+Shift+Space");
+            }
+
+            if (failedHotkeys.Count > 0)
+            {
+                var message = $"Kısayol kaydedilemedi: {string.Join(", ", failedHotkeys)} (başka bir uygulama kullanıyor olabilir)";
+                _viewModel.MessageQueue.Enqueue(message);
+                _notifyIcon?.ShowBalloonTip(4000, "DevVault", message, WinForms.ToolTipIcon.Warning);
+            }
         }
 
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            const int WM_HOTKEY = 0x0312;
-            if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
+            if (App.ShowExistingInstanceMessage != 0 && (uint)msg == App.ShowExistingInstanceMessage)
             {
-                this.Show();
-                this.WindowState = WindowState.Normal;
-                this.Activate();
-                _viewModel.NewSnippetCommand.Execute(null);
+                ShowAndActivateMainWindow();
                 handled = true;
+                return IntPtr.Zero;
+            }
+
+            const int WM_HOTKEY = 0x0312;
+            if (msg == WM_HOTKEY)
+            {
+                var id = wParam.ToInt32();
+                if (id == HOTKEY_ID)
+                {
+                    ShowAndActivateMainWindow();
+                    _viewModel.NewSnippetCommand.Execute(null);
+                    handled = true;
+                }
+                else if (id == HOTKEY_QUICK_SEARCH_ID)
+                {
+                    ToggleQuickSearch();
+                    handled = true;
+                }
             }
             return IntPtr.Zero;
         }
 
         protected override void OnClosing(CancelEventArgs e)
         {
-            if (!_viewModel.ConfirmDiscardChanges())
+            var exiting = _isExiting || App.IsSystemShuttingDown;
+
+            if (!exiting && _viewModel.Settings.MinimizeToTray)
+            {
+                e.Cancel = true;
+                Hide();
+
+                if (!_trayBalloonShown)
+                {
+                    _trayBalloonShown = true;
+                    _notifyIcon?.ShowBalloonTip(
+                        3000,
+                        "DevVault",
+                        "DevVault arka planda çalışmaya devam ediyor. Çıkmak için tepsi simgesine sağ tıklayın.",
+                        WinForms.ToolTipIcon.Info);
+                }
+                return;
+            }
+
+            if (!exiting && !_viewModel.ConfirmDiscardChanges())
             {
                 e.Cancel = true;
                 return;
             }
+
+            _isExiting = true;
             base.OnClosing(e);
         }
 
@@ -173,6 +390,25 @@ namespace KodDepolama
         {
             IntPtr handle = new WindowInteropHelper(this).Handle;
             UnregisterHotKey(handle, HOTKEY_ID);
+            UnregisterHotKey(handle, HOTKEY_QUICK_SEARCH_ID);
+
+            if (_quickSearchWindow != null)
+            {
+                _quickSearchWindow.AllowClose = true;
+                _quickSearchWindow.Close();
+                _quickSearchWindow = null;
+            }
+
+            if (_notifyIcon != null)
+            {
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
+                _notifyIcon = null;
+            }
+
+            _extractedTrayIcon?.Dispose();
+            _extractedTrayIcon = null;
+
             base.OnClosed(e);
         }
 
@@ -199,14 +435,25 @@ namespace KodDepolama
                 _viewModel.CopySnippetCommand.Execute(null);
                 e.Handled = true;
             }
+            else if (e.Key == Key.V && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+            {
+                if (Keyboard.FocusedElement is not System.Windows.Controls.Primitives.TextBoxBase && !webView.IsKeyboardFocusWithin)
+                {
+                    _viewModel.NewFromClipboardCommand.Execute(null);
+                    e.Handled = true;
+                }
+            }
         }
 
         private void BtnShortcuts_Click(object sender, RoutedEventArgs e)
         {
-            var msg = "Global Kısayol: Ctrl + Shift + S (Uygulama kapalıyken bile yeni kod penceresini açar)\n\n" +
+            var msg = "Global Kısayollar:\n" +
+                      "- Ctrl + Shift + Space : Hızlı arama (her yerden)\n" +
+                      "- Ctrl + Shift + S : Yeni kod penceresini aç (uygulama tepside çalışırken)\n\n" +
                       "Uygulama İçi Kısayollar:\n" +
                       "- Ctrl + S : Kaydet\n" +
                       "- Ctrl + N : Yeni\n" +
+                      "- Ctrl + Shift + V : Panodan yeni snippet\n" +
                       "- Ctrl + F : Arama\n" +
                       "- Ctrl + Shift + C : Kopyala";
             System.Windows.MessageBox.Show(msg, "Kısayollar", MessageBoxButton.OK, MessageBoxImage.Information);

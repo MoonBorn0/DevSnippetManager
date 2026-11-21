@@ -6,10 +6,13 @@ DevVault, kod parçacıklarınızı (snippet) yerel **SQLite** veritabanında sa
 
 - **Modern Arayüz:** WPF ve MaterialDesignThemes tabanlı sade ve duyarlı tasarım
 - **Yerel Monaco Editor:** WebView2 üzerinde çalışan, uygulama ile birlikte gelen yerel Monaco Editor (çevrimdışı çalışır, sözdizimi renklendirmesi destekler)
-- **Gelişmiş Arama:** Başlık, etiket, açıklama ve kod içeriğinde büyük/küçük harf duyarsız arama
-- **Dile Göre Filtreleme:** C#, Java, Python, SQL, JavaScript, HTML/CSS ve Diğer dillerine göre hızlı filtreleme
-- **Panoya Kopyalama:** Editördeki kodu tek tıkla veya `Ctrl + Shift + C` ile panoya kopyalama
-- **Kaydedilmemiş Değişiklik Uyarısı:** Farklı bir kayda geçerken, yeni kayıt oluştururken veya pencereyi kapatırken kaydedilmemiş değişiklikler için onay istemi
+- **Organizasyon ve Filtreleme:** Dil, klasör, çoklu etiket çipleri, favoriler ve sıralama seçenekleri (ada göre, son güncellenen, en yeni, en çok kullanılan)
+- **Hızlı Arama ve Bulanık Eşleştirme (Fuzzy Search):** Herhangi bir uygulamadayken `Ctrl + Shift + Space` ile açılan hızlı arama penceresi; başlık, etiket, klasör, açıklama ve kod üzerinde bulanık arama yapar, eşleşen karakterleri vurgular, `Enter` ile panoya kopyalar ve `Ctrl + Enter` ile ana pencerede açar
+- **Şablon Değişkenleri:** Kod parçacıklarında `${Ad}` ve varsayılan değerli `${Ad:varsayılan}` yer tutucuları tanımlanabilir; kopyalama sırasında değişken değerleri bir pencereyle sorulup doldurulur. Değişken olarak yorumlanmaması için `$${` kaçış dizisi kullanılır (çıktıda `${` olur)
+- **Panodan Yeni Snippet (Otomatik Dil Algılama):** `Panodan` butonu veya `Ctrl + Shift + V` ile panodaki kodu otomatik dil algılamayla yeni snippet olarak oluşturma
+- **Sistem Tepsisi (Tray) Desteği:** Pencere kapatıldığında uygulama arka planda sistem tepsisinde çalışmaya devam eder (`MinimizeToTray`); tepsi simgesine çift tıklayarak pencere açılır, sağ tık menüsüyle hızlı arama, yeni snippet, panodan ekleme, tepsiye küçültme ayarı ve çıkış yapılabilir
+- **Panoya Kopyalama:** Editördeki kodu tek tıkla veya `Ctrl + Shift + C` ile panoya kopyalama (kullanım sayısını otomatik takip eder)
+- **Kaydedilmemiş Değişiklik Uyarısı:** Farklı bir kayda geçerken, yeni kayıt oluştururken veya uygulamadan çıkarken kaydedilmemiş değişiklikler için onay istemi
 - **Akıllı JSON İçe Aktarma ve Dışa Aktarma:** Üç farklı içe aktarma moduyla güvenli aktarım:
   - **Birleştir (varsayılan):** Aynı başlık (büyük/küçük harf duyarsız) ve dildeki kayıtlar içerik olarak farklıysa güncellenir, aynıysa atlanır; yeni kayıtlar eklenir.
   - **Kopyaları atla:** Mevcut kayıtlarla eşleşenler atlanır, yalnızca yeni kayıtlar eklenir.
@@ -19,11 +22,13 @@ DevVault, kod parçacıklarınızı (snippet) yerel **SQLite** veritabanında sa
 
 ## Klavye Kısayolları
 
-- **Global Kısayol (uygulama çalışırken):**
+- **Global Kısayollar (uygulama tepside çalışırken de etkindir):**
+  - `Ctrl + Shift + Space` : Hızlı arama penceresini aç/kapat
   - `Ctrl + Shift + S` : Pencereyi öne getirir ve yeni kod parçacığı oluşturur
 - **Uygulama İçi Kısayollar:**
   - `Ctrl + S` : Kaydet
   - `Ctrl + N` : Yeni kod parçacığı
+  - `Ctrl + Shift + V` : Panodan yeni snippet oluştur (metin kutusu veya editör dışındayken)
   - `Ctrl + F` : Arama kutusuna odaklan
   - `Ctrl + Shift + C` : Kodu panoya kopyala
 
@@ -43,7 +48,9 @@ Uygulama SQL Server gerektirmez; tüm veriler ve ayarlar kullanıcı profilinde 
 | `BackupFolder` | Otomatik ve manuel yedeklerin kaydedileceği klasör | `%APPDATA%\DevVault\Backups` |
 | `BackupIntervalHours` | Otomatik yedekleme aralığı (saat; `0` veya negatif ise kapalı) | `24` |
 | `MaxBackups` | Saklanacak en fazla yedek dosyası sayısı | `10` |
+| `MinimizeToTray` | Pencere kapatıldığında sistem tepsisine küçült | `true` |
 | `LastBackupAt` | Son yedekleme zamanı (otomatik güncellenir) | `null` |
+| `CustomLanguages` | Kullanıcının eklediği özel programlama dilleri | `[]` |
 
 > **Eski SQL Server sürümünden geçiş notu:** Önceki SQL Server tabanlı sürümü kullanıyorsanız, eski sürümde kayıtlarınızı JSON olarak dışa aktarın ve yeni SQLite sürümünde **İçe Aktar** özelliğiyle içeri aktarın.
 
