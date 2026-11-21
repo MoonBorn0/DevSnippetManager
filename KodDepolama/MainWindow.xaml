@@ -74,17 +74,23 @@
                     </ListBox>
 
                     <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,16,0,0" HorizontalAlignment="Center">
-                        <Button Command="{Binding NewSnippetCommand}" Margin="0,0,8,0" ToolTip="Yeni Ekle">
+                        <Button Command="{Binding NewSnippetCommand}" Margin="0,0,6,0" ToolTip="Yeni Ekle">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="Plus" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Yeni" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-                        <Button Command="{Binding ImportCommand}" Margin="0,0,8,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="İçe Aktar">
+                        <Button Command="{Binding ImportCommand}" Margin="0,0,6,0" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="İçe Aktar">
                             <materialDesign:PackIcon Kind="FileImportOutline" />
                         </Button>
-                        <Button Command="{Binding ExportCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Dışa Aktar">
+                        <Button Command="{Binding ExportCommand}" Margin="0,0,6,0" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Dışa Aktar">
                             <materialDesign:PackIcon Kind="FileExportOutline" />
+                        </Button>
+                        <Button Command="{Binding BackupNowCommand}" Margin="0,0,6,0" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Şimdi yedek al">
+                            <materialDesign:PackIcon Kind="BackupRestore" />
+                        </Button>
+                        <Button Command="{Binding OpenBackupFolderCommand}" Padding="10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Yedek klasörünü aç">
+                            <materialDesign:PackIcon Kind="FolderOpenOutline" />
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -120,6 +126,12 @@
                     </Border>
 
                     <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Command="{Binding CopySnippetCommand}" Margin="0,0,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kopyala (Ctrl+Shift+C)">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="ContentCopy" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Kopyala" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
                         <Button Click="BtnShortcuts_Click" Margin="0,0,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Kısayolları Göster">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="KeyboardOutline" Margin="0,0,4,0" VerticalAlignment="Center"/>
@@ -142,5 +154,11 @@
                 </Grid>
             </materialDesign:Card>
         </Grid>
+
+        <materialDesign:Snackbar Grid.Row="1"
+                                 MessageQueue="{Binding MessageQueue}"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Bottom"
+                                 Margin="0,0,0,16" />
     </Grid>
 </Window>

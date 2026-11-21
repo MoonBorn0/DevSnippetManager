@@ -12,6 +12,7 @@ namespace DevSnippetManager
         Task<IEnumerable<Snippet>> GetAllAsync();
         Task AddOrUpdateAsync(Snippet snippet);
         Task AddRangeAsync(IEnumerable<Snippet> snippets);
+        Task ReplaceAllAsync(IEnumerable<Snippet> snippets);
         Task DeleteAsync(Snippet snippet);
         Task ClearAsync();
         Task<List<Snippet>> ImportAsync(string filePath);

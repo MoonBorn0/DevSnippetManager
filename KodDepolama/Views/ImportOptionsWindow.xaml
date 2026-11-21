@@ -1,0 +1,80 @@
+<Window x:Class="DevSnippetManager.Views.ImportOptionsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        Title="İçe Aktar"
+        Width="440"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        TextElement.Foreground="{DynamicResource MaterialDesignBody}"
+        TextElement.FontWeight="Regular"
+        TextElement.FontSize="13"
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="Auto"
+        Background="{DynamicResource MaterialDesignPaper}"
+        FontFamily="{DynamicResource MaterialDesignFont}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="CountText"
+                   Grid.Row="0"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,16"/>
+
+        <StackPanel Grid.Row="1" Margin="0,0,0,20">
+            <RadioButton x:Name="MergeRadio"
+                         IsChecked="True"
+                         Margin="0,0,0,10"
+                         Style="{StaticResource MaterialDesignRadioButton}">
+                <StackPanel>
+                    <TextBlock Text="Birleştir" FontWeight="SemiBold"/>
+                    <TextBlock Text="Aynı başlık ve dildeki kayıtlar farklıysa güncellenir, yeniler eklenir."
+                               FontSize="12"
+                               Opacity="0.7"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </RadioButton>
+
+            <RadioButton x:Name="SkipRadio"
+                         Margin="0,0,0,10"
+                         Style="{StaticResource MaterialDesignRadioButton}">
+                <StackPanel>
+                    <TextBlock Text="Kopyaları atla" FontWeight="SemiBold"/>
+                    <TextBlock Text="Mevcut kayıtlarla eşleşenler atlanır, yalnızca yeniler eklenir."
+                               FontSize="12"
+                               Opacity="0.7"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </RadioButton>
+
+            <RadioButton x:Name="ReplaceRadio"
+                         Style="{StaticResource MaterialDesignRadioButton}">
+                <StackPanel>
+                    <TextBlock Text="Tümünü değiştir" FontWeight="SemiBold"/>
+                    <TextBlock Text="Önce otomatik yedek alınır, mevcut tüm kayıtlar silinir ve dosyadakiler eklenir."
+                               FontSize="12"
+                               Opacity="0.7"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </RadioButton>
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="İptal"
+                    IsCancel="True"
+                    Margin="0,0,10,0"
+                    Style="{StaticResource MaterialDesignOutlinedButton}"
+                    Click="CancelButton_Click"/>
+            <Button Content="İçe Aktar"
+                    IsDefault="True"
+                    Click="ImportButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

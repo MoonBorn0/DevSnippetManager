@@ -10,9 +10,16 @@
 </head>
 <body>
     <div id="container"></div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+    <script src="monaco/vs/loader.js"></script>
     <script>
-        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+        require.config({ paths: { vs: 'monaco/vs' } });
+        let suppressChangeNotification = false;
+
+        function postMessage(message) {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(message);
+            }
+        }
         require(['vs/editor/editor.main'], function () {
             window.editor = monaco.editor.create(document.getElementById('container'), {
                 value: '',
@@ -21,6 +28,37 @@
                 automaticLayout: true,
                 minimap: { enabled: false }
             });
+
+            editor.onDidChangeModelContent(function () {
+                if (!suppressChangeNotification) postMessage({ type: 'changed' });
+            });
+
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
+                postMessage({ type: 'command', name: 'save' });
+            });
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyN, function () {
+                postMessage({ type: 'command', name: 'new' });
+            });
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, function () {
+                postMessage({ type: 'command', name: 'search' });
+            });
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyC, function () {
+                postMessage({ type: 'command', name: 'copy' });
+            });
+
+            window.setEditorCode = function (value) {
+                suppressChangeNotification = true;
+                try { editor.setValue(value || ''); }
+                finally { suppressChangeNotification = false; }
+            };
+
+            window.setLanguage = function (id) {
+                if (editor && editor.getModel()) {
+                    monaco.editor.setModelLanguage(editor.getModel(), id || 'plaintext');
+                }
+            };
+
+            postMessage({ type: 'ready' });
         });
     </script>
 </body>

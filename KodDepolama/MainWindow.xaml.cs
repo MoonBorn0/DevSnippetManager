@@ -1,5 +1,6 @@
 using DevSnippetManager.ViewModels;
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using Microsoft.Web.WebView2.Core;
 
 namespace KodDepolama
 {
@@ -24,6 +26,9 @@ namespace KodDepolama
         private const uint VK_S = 0x53; // 'S' key
 
         private MainViewModel _viewModel;
+        private bool _editorReady;
+        private string _pendingEditorCode = string.Empty;
+        private string _pendingEditorLanguage = "csharp";
 
         public MainWindow()
         {
@@ -33,10 +38,19 @@ namespace KodDepolama
             // Setup WebView2 and Monaco bridge
             _viewModel.UpdateEditorCodeAction = (code) =>
             {
-                if (webView.CoreWebView2 != null)
+                _pendingEditorCode = code ?? string.Empty;
+                if (_editorReady && webView.CoreWebView2 != null)
                 {
-                    var encoded = JsonSerializer.Serialize(code ?? string.Empty);
-                    webView.CoreWebView2.ExecuteScriptAsync($"window.editor.setValue({encoded});");
+                    ApplyEditorCode();
+                }
+            };
+
+            _viewModel.UpdateEditorLanguageAction = (language) =>
+            {
+                _pendingEditorLanguage = GetMonacoLanguageId(language);
+                if (_editorReady && webView.CoreWebView2 != null)
+                {
+                    ApplyEditorLanguage();
                 }
             };
 
@@ -44,7 +58,7 @@ namespace KodDepolama
             {
                 if (webView.CoreWebView2 != null)
                 {
-                    var json = await webView.CoreWebView2.ExecuteScriptAsync("window.editor.getValue();");
+                    var json = await webView.CoreWebView2.ExecuteScriptAsync("window.editor ? window.editor.getValue() : null;");
                     return JsonSerializer.Deserialize<string>(json) ?? string.Empty;
                 }
                 return string.Empty;
@@ -56,12 +70,81 @@ namespace KodDepolama
         private async void InitializeAsync()
         {
             await webView.EnsureCoreWebView2Async();
-            var htmlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MonacoEditor.html");
-            if (File.Exists(htmlPath))
-            {
-                webView.Source = new Uri(htmlPath);
-            }
+            webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                "devvault.local",
+                AppDomain.CurrentDomain.BaseDirectory,
+                CoreWebView2HostResourceAccessKind.Allow);
+            webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+            webView.Source = new Uri("https://devvault.local/MonacoEditor.html");
         }
+
+        private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            using var message = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = message.RootElement;
+            var type = root.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
+
+            Dispatcher.Invoke(() =>
+            {
+                if (type == "ready")
+                {
+                    _editorReady = true;
+                    ApplyEditorCode();
+                    ApplyEditorLanguage();
+                    return;
+                }
+
+                if (type == "changed")
+                {
+                    _viewModel.MarkCodeChanged();
+                    return;
+                }
+
+                if (type == "command" && root.TryGetProperty("name", out var nameElement))
+                {
+                    switch (nameElement.GetString())
+                    {
+                        case "save":
+                            _viewModel.SaveSnippetCommand.Execute(null);
+                            break;
+                        case "new":
+                            _viewModel.NewSnippetCommand.Execute(null);
+                            break;
+                        case "search":
+                            SearchBox.Focus();
+                            break;
+                        case "copy":
+                            _viewModel.CopySnippetCommand.Execute(null);
+                            break;
+                    }
+                }
+            });
+        }
+
+        private void ApplyEditorCode()
+        {
+            if (!_editorReady || webView.CoreWebView2 == null) return;
+            var encoded = JsonSerializer.Serialize(_pendingEditorCode);
+            webView.CoreWebView2.ExecuteScriptAsync($"window.setEditorCode({encoded});");
+        }
+
+        private void ApplyEditorLanguage()
+        {
+            if (!_editorReady || webView.CoreWebView2 == null) return;
+            var encoded = JsonSerializer.Serialize(_pendingEditorLanguage);
+            webView.CoreWebView2.ExecuteScriptAsync($"window.setLanguage({encoded});");
+        }
+
+        private static string GetMonacoLanguageId(string? language) => language switch
+        {
+            "C#" => "csharp",
+            "Java" => "java",
+            "Python" => "python",
+            "SQL" => "sql",
+            "JavaScript" => "javascript",
+            "HTML/CSS" => "html",
+            _ => "plaintext"
+        };
 
         protected override void OnSourceInitialized(EventArgs e)
         {
@@ -84,6 +167,16 @@ namespace KodDepolama
                 handled = true;
             }
             return IntPtr.Zero;
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            if (!_viewModel.ConfirmDiscardChanges())
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnClosing(e);
         }
 
         protected override void OnClosed(EventArgs e)
@@ -111,6 +204,11 @@ namespace KodDepolama
                 SearchBox.Focus();
                 e.Handled = true;
             }
+            else if (e.Key == Key.C && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+            {
+                _viewModel.CopySnippetCommand.Execute(null);
+                e.Handled = true;
+            }
         }
 
         private void BtnShortcuts_Click(object sender, RoutedEventArgs e)
@@ -119,7 +217,8 @@ namespace KodDepolama
                       "Uygulama İçi Kısayollar:\n" +
                       "- Ctrl + S : Kaydet\n" +
                       "- Ctrl + N : Yeni\n" +
-                      "- Ctrl + F : Arama";
+                      "- Ctrl + F : Arama\n" +
+                      "- Ctrl + Shift + C : Kopyala";
             System.Windows.MessageBox.Show(msg, "Kısayollar", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }

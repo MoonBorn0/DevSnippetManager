@@ -1,17 +1,29 @@
 using KodDepolama;
 using Microsoft.EntityFrameworkCore;
+using System.IO;
 
 namespace DevSnippetManager.Data
 {
     public class AppDbContext : DbContext
     {
+        private readonly string _databasePath;
+
         public DbSet<Snippet> Snippets { get; set; }
+
+        public AppDbContext(string databasePath)
+        {
+            _databasePath = databasePath;
+        }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
             if (!optionsBuilder.IsConfigured)
             {
-                optionsBuilder.UseSqlServer("Server=localhost;Database=DevVaultDb;Trusted_Connection=True;TrustServerCertificate=True;");
+                var databaseFolder = Path.GetDirectoryName(Path.GetFullPath(_databasePath));
+                if (!string.IsNullOrWhiteSpace(databaseFolder))
+                    Directory.CreateDirectory(databaseFolder);
+
+                optionsBuilder.UseSqlite($"Data Source={_databasePath}");
             }
         }
 
