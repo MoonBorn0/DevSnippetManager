@@ -24,6 +24,14 @@ DevVault, kod parçacıklarınızı (snippet) yerel **SQLite** veritabanında sa
 
 Mevcut bir snippet'in başlık, dil, etiket, açıklama, klasör veya kod içeriği değiştirilip kaydedildiğinde (veya içe aktarmada birleştirme ile güncellendiğinde) önceki hali otomatik olarak **Sürüm Geçmişi**ne kaydedilir (snippet başına en fazla 20 sürüm saklanır; yalnızca favori/kullanım sayısı güncellemeleri sürüm oluşturmaz). Editör alt çubuğundaki **Geçmiş** butonuyla sürümleri satır bazlı fark (diff) görünümü ve *"Sadece değişiklikler"* filtresiyle inceleyebilir, seçtiğiniz bir sürümü tek tıkla editöre geri yükleyebilirsiniz.
 
+## Projeden snippet çıkarma
+
+Sol paneldeki **Projeden ekle** butonuyla seçtiğiniz kaynak dosyalarını veya bir proje klasörünü tarayarak metot, fonksiyon, sınıf, arayüz, kayıt, yapı, enum, özellik, kurucu ve SQL prosedürlerini doğrudan snippet olarak kasaya ekleyebilirsiniz:
+
+- **Dil Desteği:** C# için Roslyn ayrıştırıcısı; Java, JavaScript, TypeScript, C, C++, Go, Rust, PHP, Kotlin, Swift, Python, Ruby, PowerShell, Bash ve SQL için kural tabanlı blok çıkarıcı.
+- **Akıllı Yeniden Tarama:** *"Taranan projeler"* menüsünden mevcut projeleri yeniden tarayabilirsiniz. Değişen bloklar güncellenir (eski hâli sürüm geçmişine düşer), kullanıcı açıklamaları/başlıkları/etiketleri/favorileri korunur, yeniden adlandırılan veya taşınan aynı kodlu bloklar otomatik yeniden bağlanır, kaynakta artık bulunmayan bloklar silinmek yerine *"kaynakta artık yok"* olarak işaretlenir.
+- **Yapay zekâya sor:** Editördeki **Yapay zekâya sor** butonu, mevcut kodu ve kaynak bilgisini öğrenci dostu bir Türkçe açıklama istemiyle panoya kopyalar ve açıklama alanını düzenleme moduna geçirir.
+
 ## Klavye Kısayolları
 
 - **Global Kısayollar (uygulama tepside çalışırken de etkindir):**

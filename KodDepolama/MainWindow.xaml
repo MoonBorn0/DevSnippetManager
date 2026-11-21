@@ -208,6 +208,16 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Border Padding="8" CornerRadius="4" Background="Transparent" Cursor="Hand">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Opacity" Value="1"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSourceMissing}" Value="True">
+                                                    <Setter Property="Opacity" Value="0.5"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <StackPanel>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -278,10 +288,19 @@
                                                 <materialDesign:PackIcon Grid.Column="0" Kind="FolderOutline" Width="13" Height="13" Opacity="0.6" Margin="0,0,3,0" VerticalAlignment="Center"/>
                                                 <TextBlock Grid.Column="1" Text="{Binding Folder}" FontSize="11" Opacity="0.6" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                                             </Grid>
-                                            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                        Visibility="{Binding UsageCount, Converter={StaticResource PositiveIntToVis}}">
-                                                <materialDesign:PackIcon Kind="ContentCopy" Width="12" Height="12" Opacity="0.6" Margin="0,0,3,0" VerticalAlignment="Center"/>
-                                                <TextBlock Text="{Binding UsageCount}" FontSize="11" Opacity="0.6" VerticalAlignment="Center"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                <materialDesign:PackIcon Kind="LinkOff"
+                                                                         Width="13" Height="13"
+                                                                         Opacity="0.8"
+                                                                         Margin="0,0,6,0"
+                                                                         VerticalAlignment="Center"
+                                                                         ToolTip="Kaynakta artık yok"
+                                                                         Visibility="{Binding IsSourceMissing, Converter={StaticResource BoolToVis}}"/>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                                            Visibility="{Binding UsageCount, Converter={StaticResource PositiveIntToVis}}">
+                                                    <materialDesign:PackIcon Kind="ContentCopy" Width="12" Height="12" Opacity="0.6" Margin="0,0,3,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding UsageCount}" FontSize="11" Opacity="0.6" VerticalAlignment="Center"/>
+                                                </StackPanel>
                                             </StackPanel>
                                         </Grid>
                                     </StackPanel>
@@ -291,6 +310,38 @@
                     </ListBox>
 
                     <StackPanel Grid.Row="5" Margin="0,12,0,0">
+                        <!-- Scan progress bar (only while scanning) -->
+                        <Grid Visibility="{Binding ProjectScan.IsScanning, Converter={StaticResource BoolToVis}}" Margin="0,0,0,8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding ProjectScan.ScanProgressText}"
+                                           FontSize="11"
+                                           Opacity="0.75"
+                                           TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"/>
+                                <Button Grid.Column="1"
+                                        Content="İptal"
+                                        Command="{Binding ProjectScan.CancelScanCommand}"
+                                        Style="{StaticResource MaterialDesignFlatButton}"
+                                        Height="20"
+                                        Padding="6,0"
+                                        FontSize="11"/>
+                            </Grid>
+                            <ProgressBar Grid.Row="1"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Value="{Binding ProjectScan.ScanProgressValue}"
+                                         Height="4"/>
+                        </Grid>
+
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -310,6 +361,17 @@
                                 </StackPanel>
                             </Button>
                         </Grid>
+
+                        <Button x:Name="BtnScanProject"
+                                Click="BtnScanProject_Click"
+                                Margin="0,8,0,0"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                ToolTip="Projeden veya dosyalardan snippet çıkar">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <materialDesign:PackIcon Kind="FolderSearchOutline" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Projeden ekle" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
 
                         <UniformGrid Columns="4" Margin="-3,8,-3,0">
                             <Button Command="{Binding ImportCommand}" Margin="3,0" Padding="0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="İçe Aktar">
@@ -422,7 +484,40 @@
                         </Button>
                     </Grid>
 
-                    <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Etiketler (Virgülle ayırın)" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Text="{Binding EditTags, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,12"/>
+                    <StackPanel Grid.Row="1" Margin="0,0,0,10">
+                        <TextBox materialDesign:HintAssist.Hint="Etiketler (Virgülle ayırın)" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Text="{Binding EditTags, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Grid Visibility="{Binding HasEditSourceInfo, Converter={StaticResource BoolToVis}}" Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding EditSourceInfo}"
+                                       FontSize="11.5"
+                                       Opacity="0.7"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"/>
+                            <Border Grid.Column="1"
+                                    Visibility="{Binding EditIsSourceMissing, Converter={StaticResource BoolToVis}}"
+                                    Background="#33FF5252"
+                                    CornerRadius="4"
+                                    Padding="6,1"
+                                    Margin="8,0,0,0"
+                                    VerticalAlignment="Center">
+                                <TextBlock Text="kaynakta artık yok" FontSize="11"/>
+                            </Border>
+                            <Button Grid.Column="2"
+                                    Content="Dosyayı aç"
+                                    Command="{Binding OpenSourceFileCommand}"
+                                    Style="{StaticResource MaterialDesignFlatButton}"
+                                    Height="22"
+                                    Padding="6,0"
+                                    Margin="6,0,0,0"
+                                    FontSize="11.5"
+                                    VerticalAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
 
                     <!-- Description with Markdown Edit / Preview -->
                     <StackPanel Grid.Row="2" Margin="0,0,0,12">
@@ -517,7 +612,13 @@
                     </Border>
 
                     <WrapPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Command="{Binding ShowHistoryCommand}" Margin="0,4,12,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Sürüm geçmişi">
+                        <Button Command="{Binding AskAiCommand}" Margin="0,4,10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Yapay zekâya sor — soruyu panoya kopyala">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="LightbulbOutline" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Yapay zekâya sor" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding ShowHistoryCommand}" Margin="0,4,10,0" Style="{StaticResource MaterialDesignOutlinedButton}" ToolTip="Sürüm geçmişi">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="History" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Geçmiş" VerticalAlignment="Center"/>

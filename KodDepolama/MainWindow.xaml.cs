@@ -117,6 +117,10 @@ namespace KodDepolama
                 window.ShowDialog();
                 return Task.CompletedTask;
             };
+            _viewModel.ProjectScan.ShowTrayBalloonAction = (text) =>
+            {
+                Dispatcher.Invoke(() => _notifyIcon?.ShowBalloonTip(4000, "DevVault", text, WinForms.ToolTipIcon.Info));
+            };
 
             InitializeTrayIcon();
             InitializeAsync();
@@ -618,6 +622,64 @@ namespace KodDepolama
         private void BtnSettings_Click(object sender, RoutedEventArgs e)
         {
             OpenSettingsWindow();
+        }
+
+        private void BtnScanProject_Click(object sender, RoutedEventArgs e)
+        {
+            var menu = new System.Windows.Controls.ContextMenu();
+
+            var filesItem = new System.Windows.Controls.MenuItem
+            {
+                Header = "Dosya seç…",
+                Command = _viewModel.ProjectScan.ScanFilesCommand
+            };
+            var folderItem = new System.Windows.Controls.MenuItem
+            {
+                Header = "Klasör seç…",
+                Command = _viewModel.ProjectScan.ScanFolderCommand
+            };
+
+            menu.Items.Add(filesItem);
+            menu.Items.Add(folderItem);
+
+            if (_viewModel.ProjectScan.HasScannedProjects)
+            {
+                menu.Items.Add(new System.Windows.Controls.Separator());
+                var projectsSubmenu = new System.Windows.Controls.MenuItem { Header = "Taranan projeler" };
+
+                foreach (var proj in _viewModel.ProjectScan.ScannedProjects)
+                {
+                    var projItem = new System.Windows.Controls.MenuItem
+                    {
+                        Header = $"{proj.Folder} ({proj.SnippetCount})"
+                    };
+
+                    projItem.Items.Add(new System.Windows.Controls.MenuItem
+                    {
+                        Header = "Yeniden tara",
+                        Command = _viewModel.ProjectScan.RescanProjectCommand,
+                        CommandParameter = proj
+                    });
+
+                    if (!proj.RootExists)
+                    {
+                        projItem.Items.Add(new System.Windows.Controls.MenuItem
+                        {
+                            Header = "Konumu değiştir…",
+                            Command = _viewModel.ProjectScan.RelocateProjectCommand,
+                            CommandParameter = proj
+                        });
+                    }
+
+                    projectsSubmenu.Items.Add(projItem);
+                }
+
+                menu.Items.Add(projectsSubmenu);
+            }
+
+            menu.PlacementTarget = BtnScanProject;
+            menu.Placement = PlacementMode.Top;
+            menu.IsOpen = true;
         }
 
         private void SidebarSplitter_MouseDoubleClick(object sender, MouseButtonEventArgs e)

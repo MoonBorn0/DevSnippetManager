@@ -153,6 +153,14 @@ namespace DevSnippetManager.ViewModels
         public Func<HistoryViewModel, Task>? ShowHistoryWindowFunc { get; set; }
         public IReadOnlyList<Snippet> AllSnippets => _allSnippets;
         public SyncViewModel Sync { get; }
+        public ProjectScanViewModel ProjectScan { get; }
+
+        public string EditSourceInfo => _editingSnippet != null && _editingSnippet.IsFromSource
+            ? $"Kaynak: {(!string.IsNullOrWhiteSpace(_editingSnippet.Folder) ? _editingSnippet.Folder + "/" : string.Empty)}{_editingSnippet.SourceFile.Replace('\\', '/')}"
+            : string.Empty;
+
+        public bool HasEditSourceInfo => !string.IsNullOrEmpty(EditSourceInfo);
+        public bool EditIsSourceMissing => _editingSnippet?.IsSourceMissing == true;
 
         public MainViewModel()
         {
@@ -168,6 +176,7 @@ namespace DevSnippetManager.ViewModels
             _repository = new SnippetRepository(_settings);
             _backupService = new BackupService(_settings);
             Sync = new SyncViewModel(this, _settings);
+            ProjectScan = new ProjectScanViewModel(this, _repository);
             InitializeAsync();
         }
 
@@ -374,8 +383,9 @@ namespace DevSnippetManager.ViewModels
             var folders = _allSnippets.Select(s => s.Folder?.Trim() ?? string.Empty)
                 .Where(f => f.Length > 0).Distinct(StringComparer.Ordinal).OrderBy(f => f, StringComparer.Create(_turkish, true)).ToList();
             EditFolders = new ObservableCollection<string>(folders);
-            FolderFilters = new ObservableCollection<string>(new[] { "Tüm klasörler", "Klasörsüz" }.Concat(folders));
+            FolderFilters = new ObservableCollection<string>(new[] { "Tüm klasörler", "Klasörsüz", "Kaynakta olmayanlar" }.Concat(folders));
             SelectedFolderFilter = FolderFilters.Contains(selectedFolder) ? selectedFolder : "Tüm klasörler";
+            ProjectScan.RefreshProjects(_allSnippets);
 
             var tagGroups = _allSnippets.SelectMany(s => GetTags(s.Tags)
                     .Distinct(StringComparer.Create(_turkish, true)))
@@ -519,7 +529,7 @@ namespace DevSnippetManager.ViewModels
                 EditIsFavorite = value.IsFavorite;
                 IsCodeModified = false;
                 UpdateEditorCodeAction?.Invoke(value.Code);
-                ShowHistoryCommand.NotifyCanExecuteChanged();
+                NotifyEditingSnippetStateChanged();
             }
             else
             {
@@ -541,6 +551,8 @@ namespace DevSnippetManager.ViewModels
 
             if (SelectedFolderFilter == "Klasörsüz")
                 query = query.Where(s => string.IsNullOrWhiteSpace(s.Folder));
+            else if (SelectedFolderFilter == "Kaynakta olmayanlar")
+                query = query.Where(s => s.IsSourceMissing);
             else if (SelectedFolderFilter != "Tüm klasörler")
                 query = query.Where(s => string.Equals(s.Folder, SelectedFolderFilter, StringComparison.Ordinal));
 
@@ -648,7 +660,133 @@ namespace DevSnippetManager.ViewModels
             EditIsFavorite = false;
             IsCodeModified = false;
             UpdateEditorCodeAction?.Invoke(string.Empty);
+            NotifyEditingSnippetStateChanged();
+        }
+
+        private void NotifyEditingSnippetStateChanged()
+        {
             ShowHistoryCommand.NotifyCanExecuteChanged();
+            OpenSourceFileCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(EditSourceInfo));
+            OnPropertyChanged(nameof(HasEditSourceInfo));
+            OnPropertyChanged(nameof(EditIsSourceMissing));
+        }
+
+        private bool CanOpenSourceFile()
+        {
+            if (_editingSnippet == null || !_editingSnippet.IsFromSource || string.IsNullOrWhiteSpace(_editingSnippet.SourceRoot))
+                return false;
+
+            var fullPath = Path.Combine(_editingSnippet.SourceRoot, _editingSnippet.SourceFile);
+            return File.Exists(fullPath);
+        }
+
+        [RelayCommand(CanExecute = nameof(CanOpenSourceFile))]
+        private void OpenSourceFile()
+        {
+            if (_editingSnippet == null || !_editingSnippet.IsFromSource || string.IsNullOrWhiteSpace(_editingSnippet.SourceRoot))
+                return;
+
+            var fullPath = Path.Combine(_editingSnippet.SourceRoot, _editingSnippet.SourceFile);
+            if (!File.Exists(fullPath))
+            {
+                MessageQueue.Enqueue("Kaynak dosya bulunamadı.");
+                return;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(fullPath) { UseShellExecute = true });
+            }
+            catch (Exception)
+            {
+                MessageQueue.Enqueue("Dosya açılamadı.");
+            }
+        }
+
+        [RelayCommand]
+        private async Task AskAiAsync()
+        {
+            var code = GetEditorCodeFunc != null ? await GetEditorCodeFunc() : string.Empty;
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                MessageQueue.Enqueue("Açıklanacak kod yok");
+                return;
+            }
+
+            var lang = LanguageCatalog.Normalize(EditLanguage);
+            var monacoLang = LanguageCatalog.GetMonacoId(lang);
+            var sourceLine = _editingSnippet != null && _editingSnippet.IsFromSource
+                ? $"Kaynak: {(!string.IsNullOrWhiteSpace(_editingSnippet.Folder) ? _editingSnippet.Folder + "/" : string.Empty)}{_editingSnippet.SourceFile.Replace('\\', '/')} — {_editingSnippet.SourceSymbol}"
+                : (!string.IsNullOrWhiteSpace(EditTitle) ? $"Kaynak: {EditTitle.Trim()}" : string.Empty);
+
+            var header =
+                $"Aşağıdaki {lang} kodunu programlamayı öğrenen bir öğrenciye anlatır gibi Türkçe açıkla.\n" +
+                "1) Ne işe yarar (1-2 cümle)  2) Nasıl çalışır (adım adım)  3) Kullandığı önemli kavramlar\n" +
+                "4) Dikkat edilmesi gerekenler. Cevabı Markdown olarak ver.\n\n";
+
+            var prompt = header +
+                (string.IsNullOrEmpty(sourceLine) ? string.Empty : sourceLine + "\n") +
+                $"```{monacoLang}\n{code}\n```";
+
+            try
+            {
+                System.Windows.Clipboard.SetText(prompt);
+                IsDescriptionPreview = false;
+                MessageQueue.Enqueue("Soru panoya kopyalandı — cevabı açıklama alanına yapıştırın");
+            }
+            catch (Exception)
+            {
+                MessageQueue.Enqueue("Panoya kopyalanamadı");
+            }
+        }
+
+        internal async Task RefreshAfterScanAsync(bool openSnippetModifiedBeforeScan)
+        {
+            var openId = _editingSnippet?.Id ?? SelectedSnippet?.Id;
+            var oldUpdatedAt = _editingSnippet?.UpdatedAt;
+
+            var previousSuppress = _suppressUnsavedCheck;
+            _suppressUnsavedCheck = true;
+            try
+            {
+                await LoadDataAsync();
+                if (openId.HasValue && openId.Value != 0)
+                {
+                    var refreshed = _allSnippets.FirstOrDefault(s => s.Id == openId.Value);
+                    if (refreshed != null)
+                    {
+                        var changedByScan = oldUpdatedAt.HasValue && refreshed.UpdatedAt != oldUpdatedAt.Value;
+                        if (changedByScan && openSnippetModifiedBeforeScan)
+                        {
+                            MessageQueue.Enqueue("Açık snippet kaynakta değişti; kaydederseniz tarama sonucu sürüm geçmişine düşer");
+                        }
+                        else if (changedByScan)
+                        {
+                            _editingSnippet = refreshed;
+                            SelectedSnippet = refreshed;
+                            EditTitle = refreshed.Title;
+                            EditTags = refreshed.Tags;
+                            EditLanguage = string.IsNullOrWhiteSpace(refreshed.Language) ? "Diğer" : refreshed.Language;
+                            EditDescription = refreshed.Description;
+                            IsDescriptionPreview = !string.IsNullOrWhiteSpace(refreshed.Description);
+                            EditFolder = refreshed.Folder ?? string.Empty;
+                            EditIsFavorite = refreshed.IsFavorite;
+                            IsCodeModified = false;
+                            UpdateEditorCodeAction?.Invoke(refreshed.Code);
+                        }
+                        else
+                        {
+                            _editingSnippet = refreshed;
+                        }
+                    }
+                }
+                NotifyEditingSnippetStateChanged();
+            }
+            finally
+            {
+                _suppressUnsavedCheck = previousSuppress;
+            }
         }
 
         private bool CanShowHistory() => _editingSnippet != null && _editingSnippet.Id != 0;
