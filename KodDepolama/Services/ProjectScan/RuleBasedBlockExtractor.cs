@@ -18,8 +18,12 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         "if", "else", "for", "foreach", "while", "do", "switch", "case", "catch", "try",
         "finally", "synchronized", "lock", "using", "return", "sizeof", "typeof", "match",
         "when", "with", "guard", "defer", "select", "struct", "class", "interface", "enum",
-        "record", "namespace", "impl", "trait", "mod", "where"
+        "record", "namespace", "impl", "trait", "mod", "where", "protocol", "extension"
     };
+
+    private static readonly Regex StatementStartRegex = new(
+        @"^(?:set|import|package|use|require|include|export\s+(?:type|interface|enum|class|function|const|let|var|default)|const|let|var|type|func|fun|fn|def|class|struct|enum|interface|trait|protocol|extension|object|companion|impl|mod|namespace|public|private|protected|internal|fileprivate|open|static|final|abstract|override|virtual|inline|extern|async|suspend|function|filter|typedef|CREATE)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public bool CanHandle(string language)
     {
@@ -33,27 +37,31 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             return new ExtractionResult(Array.Empty<ExtractedBlock>(), false);
 
         var masked = SourceMasker.Mask(text, language);
+        var sourceLines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         var blocks = new List<ExtractedBlock>();
         var symbolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var hasErrors = false;
 
         if (string.Equals(language, "Python", StringComparison.OrdinalIgnoreCase))
         {
-            ExtractPython(text, masked, blocks, symbolCounts);
+            var maskedLines = masked.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            ExtractPythonRange(sourceLines, maskedLines, 0, sourceLines.Length, classPrefix: string.Empty, blocks, symbolCounts);
         }
         else if (string.Equals(language, "Ruby", StringComparison.OrdinalIgnoreCase))
         {
-            hasErrors = ExtractRuby(text, masked, blocks, symbolCounts);
+            var maskedLines = masked.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            hasErrors = ExtractRuby(sourceLines, maskedLines, blocks, symbolCounts);
         }
         else if (string.Equals(language, "SQL", StringComparison.OrdinalIgnoreCase))
         {
-            ExtractSql(text, masked, blocks, symbolCounts);
+            var maskedLines = masked.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            ExtractSql(sourceLines, maskedLines, blocks, symbolCounts);
         }
         else
         {
             hasErrors = !AreBracesBalanced(masked);
             var lineStarts = ComputeLineStarts(text);
-            ExtractBraceRange(text, masked, language, 0, masked.Length, classPrefix: string.Empty, lineStarts, blocks, symbolCounts);
+            ExtractBraceRange(text, masked, sourceLines, language, 0, masked.Length, classPrefix: string.Empty, lineStarts, blocks, symbolCounts);
         }
 
         return new ExtractionResult(blocks, hasErrors);
@@ -89,9 +97,56 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         return -1;
     }
 
+    private static int FindNextTopLevelOpenBrace(string masked, int start, int endLimit, string language)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var isGo = string.Equals(language, "Go", StringComparison.OrdinalIgnoreCase);
+        var isTs = string.Equals(language, "TypeScript", StringComparison.OrdinalIgnoreCase);
+
+        for (var i = start; i < endLimit; i++)
+        {
+            var c = masked[i];
+            if (c == '(') parenDepth++;
+            else if (c == ')') { if (parenDepth > 0) parenDepth--; }
+            else if (c == '[') bracketDepth++;
+            else if (c == ']') { if (bracketDepth > 0) bracketDepth--; }
+            else if (isTs && c == '<' && parenDepth == 0 && bracketDepth == 0)
+            {
+                if (angleDepth > 0 || (i > start && (char.IsLetterOrDigit(masked[i - 1]) || masked[i - 1] is '_' or '$')))
+                    angleDepth++;
+            }
+            else if (isTs && c == '>' && angleDepth > 0 && !(i > start && (masked[i - 1] == '=' || masked[i - 1] == '-')))
+            {
+                angleDepth--;
+            }
+            else if (c == '{' && parenDepth == 0 && bracketDepth == 0 && angleDepth == 0)
+            {
+                // Go empty inline type like "chan struct{}" or "interface{}" in return type
+                if (isGo && i + 1 < endLimit && masked[i + 1] == '}')
+                {
+                    var lookback = i - 1;
+                    while (lookback >= start && char.IsWhiteSpace(masked[lookback])) lookback--;
+                    var before = masked[start..(lookback + 1)];
+                    if (Regex.IsMatch(before, @"\b(?:struct|interface)$") &&
+                        !Regex.IsMatch(before, @"\btype\s+\w+(?:\[[^\]]*\])?\s+(?:struct|interface)$"))
+                    {
+                        i++; // skip '}'
+                        continue;
+                    }
+                }
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private static void ExtractBraceRange(
         string source,
         string masked,
+        string[] sourceLines,
         string language,
         int rangeStart,
         int rangeEnd,
@@ -101,9 +156,11 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         Dictionary<string, int> symbolCounts)
     {
         var pos = rangeStart;
+        var isC = string.Equals(language, "C", StringComparison.OrdinalIgnoreCase);
+
         while (pos < rangeEnd)
         {
-            var openIdx = masked.IndexOf('{', pos, rangeEnd - pos);
+            var openIdx = FindNextTopLevelOpenBrace(masked, pos, rangeEnd, language);
             if (openIdx < 0)
                 break;
 
@@ -111,10 +168,32 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             if (closeIdx < 0)
                 break;
 
-            var headerStart = FindHeaderStart(masked, rangeStart, openIdx);
+            var headerStart = FindHeaderStart(masked, pos, openIdx);
             var header = masked[headerStart..openIdx].Trim();
 
-            if (TryClassifyBraceHeader(header, language, classPrefix, out var name, out var kind, out var isContainer, out var isTransparentNamespace))
+            // C typedef struct { ... } Name;
+            if (isC && Regex.IsMatch(Regex.Replace(header, @"\s+", " "), @"^typedef\s+(struct|enum|union)\b"))
+            {
+                var afterClose = closeIdx + 1;
+                var semiIdx = masked.IndexOf(';', afterClose, rangeEnd - afterClose);
+                if (semiIdx > afterClose)
+                {
+                    var alias = masked[afterClose..semiIdx].Trim();
+                    var aliasMatch = Regex.Match(alias, @"([A-Za-z_]\w*)$");
+                    if (aliasMatch.Success)
+                    {
+                        var blockStartLine = GetLineNumber(lineStarts, headerStart);
+                        var blockStart = BackUpToLineIndent(source, headerStart);
+                        var kind = header.Contains("enum", StringComparison.Ordinal) ? BlockKind.Enum : BlockKind.Struct;
+                        var comment = ExtractPrecedingComment(sourceLines, blockStartLine, language);
+                        AddBlock(aliasMatch.Groups[1].Value, kind, source[blockStart..(semiIdx + 1)], comment, blockStartLine, blocks, symbolCounts);
+                        pos = semiIdx + 1;
+                        continue;
+                    }
+                }
+            }
+
+            if (TryClassifyBraceHeader(header, language, classPrefix, out var name, out var blockKind, out var isContainer, out var isTransparent))
             {
                 var blockStartLine = GetLineNumber(lineStarts, headerStart);
                 var blockStart = BackUpToLineIndent(source, headerStart);
@@ -122,18 +201,18 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 if (blockEnd < source.Length && source[blockEnd] == ';')
                     blockEnd++;
 
-                if (isTransparentNamespace)
+                if (isTransparent)
                 {
-                    ExtractBraceRange(source, masked, language, openIdx + 1, closeIdx, classPrefix, lineStarts, blocks, symbolCounts);
+                    ExtractBraceRange(source, masked, sourceLines, language, openIdx + 1, closeIdx, classPrefix, lineStarts, blocks, symbolCounts);
                 }
                 else if (isContainer)
                 {
                     var nextPrefix = string.IsNullOrEmpty(classPrefix) ? name : $"{classPrefix}.{name}";
                     var countBefore = blocks.Count;
-                    ExtractBraceRange(source, masked, language, openIdx + 1, closeIdx, nextPrefix, lineStarts, blocks, symbolCounts);
-                    if (kind == BlockKind.Class && blocks.Count == countBefore)
+                    ExtractBraceRange(source, masked, sourceLines, language, openIdx + 1, closeIdx, nextPrefix, lineStarts, blocks, symbolCounts);
+                    if (blockKind == BlockKind.Class && blocks.Count == countBefore)
                     {
-                        var comment = ExtractPrecedingComment(source, lineStarts, blockStartLine, language);
+                        var comment = ExtractPrecedingComment(sourceLines, blockStartLine, language);
                         AddBlock(nextPrefix, BlockKind.Class, source[blockStart..blockEnd], comment, blockStartLine, blocks, symbolCounts);
                     }
                 }
@@ -142,8 +221,8 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                     var fullName = string.IsNullOrEmpty(classPrefix) || name.Contains('.', StringComparison.Ordinal)
                         ? name
                         : $"{classPrefix}.{name}";
-                    var comment = ExtractPrecedingComment(source, lineStarts, blockStartLine, language);
-                    AddBlock(fullName, kind, source[blockStart..blockEnd], comment, blockStartLine, blocks, symbolCounts);
+                    var comment = ExtractPrecedingComment(sourceLines, blockStartLine, language);
+                    AddBlock(fullName, blockKind, source[blockStart..blockEnd], comment, blockStartLine, blocks, symbolCounts);
                 }
             }
 
@@ -153,28 +232,43 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
 
     private static int FindHeaderStart(string masked, int rangeStart, int openBraceIdx)
     {
+        // Step 1: scan backward to statement boundary (;, }, {) at paren/bracket/angle depth 0
         var i = openBraceIdx - 1;
         var parenDepth = 0;
+        var bracketDepth = 0;
         var angleDepth = 0;
-        var seenNonWhitespace = false;
+        var seenNonWs = false;
 
         while (i >= rangeStart)
         {
             var c = masked[i];
             if (c == ')') parenDepth++;
             else if (c == '(') { if (parenDepth > 0) parenDepth--; }
-            else if (c == '>' && (i == rangeStart || (masked[i - 1] != '-' && masked[i - 1] != '='))) angleDepth++;
-            else if (c == '<') { if (angleDepth > 0) angleDepth--; }
-            else if (parenDepth == 0 && angleDepth == 0)
+            else if (c == ']') bracketDepth++;
+            else if (c == '[') { if (bracketDepth > 0) bracketDepth--; }
+            else if (c == '>' && parenDepth == 0 && bracketDepth == 0 && !(i > rangeStart && (masked[i - 1] == '=' || masked[i - 1] == '-')))
             {
+                angleDepth++;
+            }
+            else if (c == '<' && parenDepth == 0 && bracketDepth == 0)
+            {
+                if (angleDepth > 0) angleDepth--;
+            }
+            else if (parenDepth == 0 && bracketDepth == 0 && angleDepth == 0)
+            {
+                if (c == '}' && i > rangeStart && masked[i - 1] == '{')
+                {
+                    // Skip empty inline braces like Go's struct{} / interface{}
+                    seenNonWs = true;
+                    i -= 2;
+                    continue;
+                }
                 if (c == ';' || c == '}' || c == '{')
                 {
                     i++;
                     break;
                 }
-
-                // Stop at blank line once we've seen the header text
-                if (c == '\n' && seenNonWhitespace)
+                if (c == '\n' && seenNonWs)
                 {
                     var prev = i - 1;
                     while (prev >= rangeStart && (masked[prev] == ' ' || masked[prev] == '\t' || masked[prev] == '\r'))
@@ -188,7 +282,7 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             }
 
             if (!char.IsWhiteSpace(c))
-                seenNonWhitespace = true;
+                seenNonWs = true;
             i--;
         }
 
@@ -196,24 +290,123 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         while (i < openBraceIdx && char.IsWhiteSpace(masked[i]))
             i++;
 
-        // Strip leading preprocessor lines (#include ...) or C++ access specifiers (public:/private:/protected:)
-        while (i < openBraceIdx)
+        // Step 2: Walk line-by-line from bottom (openBraceIdx) upward through continuation/modifier/decorator lines
+        // so preceding semicolon-less statements (set -euo pipefail, import Foundation, const a = 1, var x = 1) are NOT glued in.
+        var candidateLines = new List<(int Start, int End, string Trimmed)>();
+        var cursor = i;
+        while (cursor < openBraceIdx)
         {
-            var lineEnd = masked.IndexOf('\n', i, openBraceIdx - i);
-            var segEnd = lineEnd >= 0 ? lineEnd : openBraceIdx;
-            var lineText = masked[i..segEnd].Trim();
-            if (lineText.StartsWith("#", StringComparison.Ordinal) ||
-                lineText is "public:" or "private:" or "protected:")
-            {
-                i = lineEnd >= 0 ? lineEnd + 1 : openBraceIdx;
-                while (i < openBraceIdx && char.IsWhiteSpace(masked[i]))
-                    i++;
-                continue;
-            }
-            break;
+            var nl = masked.IndexOf('\n', cursor, openBraceIdx - cursor);
+            var end = nl >= 0 ? nl : openBraceIdx;
+            var trimmed = masked[cursor..end].Trim();
+            if (trimmed.Length > 0)
+                candidateLines.Add((cursor, end, trimmed));
+            if (nl < 0) break;
+            cursor = nl + 1;
         }
 
-        return i;
+        if (candidateLines.Count <= 1)
+            return candidateLines.Count == 1 ? TrimLeadingWhitespace(masked, candidateLines[0].Start, openBraceIdx) : i;
+
+        var startIdx = candidateLines.Count - 1;
+        var openParensNeeded = CountNetClosing(candidateLines[startIdx].Trimmed, '(', ')');
+        var openAnglesNeeded = CountNetClosing(candidateLines[startIdx].Trimmed, '<', '>');
+
+        while (startIdx > 0)
+        {
+            var prevLine = candidateLines[startIdx - 1].Trimmed;
+            var curLine = candidateLines[startIdx].Trimmed;
+
+            // Stop at preprocessor directives or C++ access specifiers
+            if (prevLine.StartsWith("#", StringComparison.Ordinal) && !prevLine.StartsWith("#[", StringComparison.Ordinal))
+                break;
+            if (prevLine is "public:" or "private:" or "protected:")
+                break;
+
+            var keepPrev = false;
+
+            if (openParensNeeded > 0 || openAnglesNeeded > 0)
+            {
+                keepPrev = true;
+            }
+            else if (IsDecoratorOrAttributeLine(prevLine) || IsModifierOrTemplateLine(prevLine))
+            {
+                keepPrev = true;
+            }
+            else if (IsContinuationLine(prevLine, curLine))
+            {
+                keepPrev = true;
+            }
+
+            if (!keepPrev)
+                break;
+
+            startIdx--;
+            openParensNeeded = Math.Max(0, openParensNeeded + CountNetClosing(prevLine, '(', ')'));
+            openAnglesNeeded = Math.Max(0, openAnglesNeeded + CountNetClosing(prevLine, '<', '>'));
+        }
+
+        return TrimLeadingWhitespace(masked, candidateLines[startIdx].Start, openBraceIdx);
+    }
+
+    private static int TrimLeadingWhitespace(string text, int start, int end)
+    {
+        while (start < end && char.IsWhiteSpace(text[start]))
+            start++;
+        return start;
+    }
+
+    private static int CountNetClosing(string line, char open, char close)
+    {
+        var net = 0;
+        for (var k = 0; k < line.Length; k++)
+        {
+            if (line[k] == close && !(close == '>' && k > 0 && (line[k - 1] == '-' || line[k - 1] == '=')))
+                net++;
+            else if (line[k] == open)
+                net--;
+        }
+        return net;
+    }
+
+    private static bool IsDecoratorOrAttributeLine(string line)
+    {
+        return line.StartsWith("@", StringComparison.Ordinal) ||
+               line.StartsWith("#[", StringComparison.Ordinal);
+    }
+
+    private static bool IsModifierOrTemplateLine(string line)
+    {
+        return line.StartsWith("template", StringComparison.Ordinal) ||
+               Regex.IsMatch(line, @"^(?:public|private|protected|internal|export|static|async|virtual|inline|extern|abstract|override|final|pub(?:\([^)]*\))?)$");
+    }
+
+    private static bool IsContinuationLine(string prevLine, string curLine)
+    {
+        if (curLine == "where" ||
+            curLine.StartsWith("where ", StringComparison.Ordinal) ||
+            curLine.StartsWith("throws ", StringComparison.Ordinal) ||
+            curLine.StartsWith("extends ", StringComparison.Ordinal) ||
+            curLine.StartsWith("implements ", StringComparison.Ordinal) ||
+            curLine.StartsWith(":", StringComparison.Ordinal) ||
+            curLine.StartsWith(")", StringComparison.Ordinal) ||
+            curLine.StartsWith("{", StringComparison.Ordinal))
+            return true;
+
+        if (prevLine.EndsWith(",", StringComparison.Ordinal) ||
+            prevLine.EndsWith("(", StringComparison.Ordinal) ||
+            prevLine.EndsWith("=", StringComparison.Ordinal) ||
+            prevLine.EndsWith("=>", StringComparison.Ordinal) ||
+            prevLine.EndsWith("->", StringComparison.Ordinal) ||
+            prevLine.EndsWith(":", StringComparison.Ordinal) ||
+            prevLine.EndsWith("where", StringComparison.Ordinal))
+            return true;
+
+        // If curLine starts a brand new declaration (func/function/class/const/let/var/...), prevLine is NOT a continuation
+        if (StatementStartRegex.IsMatch(curLine))
+            return false;
+
+        return false;
     }
 
     private static bool TryClassifyBraceHeader(
@@ -223,12 +416,12 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         out string name,
         out BlockKind kind,
         out bool isContainer,
-        out bool isTransparentNamespace)
+        out bool isTransparent)
     {
         name = string.Empty;
         kind = BlockKind.Function;
         isContainer = false;
-        isTransparentNamespace = false;
+        isTransparent = false;
 
         if (string.IsNullOrWhiteSpace(header))
             return false;
@@ -238,20 +431,43 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         // PowerShell
         if (string.Equals(language, "PowerShell", StringComparison.OrdinalIgnoreCase))
         {
-            var psMatch = Regex.Match(collapsed, @"^(?:function|filter)\s+([\w-]+)\b", RegexOptions.IgnoreCase);
-            if (psMatch.Success)
+            var psClass = Regex.Match(collapsed, @"^class\s+([A-Za-z_]\w*)\b", RegexOptions.IgnoreCase);
+            if (psClass.Success)
             {
-                name = psMatch.Groups[1].Value;
+                name = psClass.Groups[1].Value;
+                kind = BlockKind.Class;
+                isContainer = true;
+                return true;
+            }
+
+            var psFn = Regex.Match(collapsed, @"^(?:function|filter)\s+([\w-]+)\b", RegexOptions.IgnoreCase);
+            if (psFn.Success)
+            {
+                name = psFn.Groups[1].Value;
                 kind = BlockKind.Function;
                 return true;
             }
+
+            if (!string.IsNullOrEmpty(classPrefix))
+            {
+                var psMethod = Regex.Match(collapsed, @"^(?:(?:static|hidden)\s+)*(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*\([^)]*\)$");
+                if (psMethod.Success && !ControlKeywords.Contains(psMethod.Groups[1].Value))
+                {
+                    name = psMethod.Groups[1].Value;
+                    kind = string.Equals(name, classPrefix.Split('.').Last(), StringComparison.OrdinalIgnoreCase)
+                        ? BlockKind.Constructor
+                        : BlockKind.Method;
+                    return true;
+                }
+            }
+
             return false;
         }
 
         // Bash
         if (string.Equals(language, "Bash", StringComparison.OrdinalIgnoreCase))
         {
-            var bashMatch = Regex.Match(collapsed, @"(?:^|\b)(?:function\s+([A-Za-z_][\w-]*)(?:\s*\(\s*\))?|([A-Za-z_][\w-]*)\s*\(\s*\))$");
+            var bashMatch = Regex.Match(collapsed, @"^(?:function\s+([A-Za-z_][\w-]*)(?:\s*\(\s*\))?|([A-Za-z_][\w-]*)\s*\(\s*\))$");
             if (bashMatch.Success)
             {
                 name = !string.IsNullOrEmpty(bashMatch.Groups[1].Value)
@@ -266,13 +482,19 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         // Namespace (C++, PHP)
         if (Regex.IsMatch(collapsed, @"^namespace\b"))
         {
-            isTransparentNamespace = true;
+            isTransparent = true;
             return true;
         }
 
-        // Rust impl block
+        // Rust
         if (string.Equals(language, "Rust", StringComparison.OrdinalIgnoreCase))
         {
+            if (Regex.IsMatch(collapsed, @"\bmod\s+[A-Za-z_]\w*\b"))
+            {
+                isTransparent = true;
+                return true;
+            }
+
             var implMatch = Regex.Match(collapsed, @"^impl(?:<[^>]*>)?\s+(?:[\w:]+(?:<[^>]*>)?\s+for\s+)?([A-Za-z_]\w*)");
             if (implMatch.Success)
             {
@@ -308,7 +530,7 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         // Go
         if (string.Equals(language, "Go", StringComparison.OrdinalIgnoreCase))
         {
-            var goMethod = Regex.Match(collapsed, @"^func\s*\(\s*\w+\s+\*?([A-Za-z_]\w*)\s*\)\s*([A-Za-z_]\w*)\s*\(");
+            var goMethod = Regex.Match(collapsed, @"^func\s*\(\s*\w+\s+\*?([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*\)\s*([A-Za-z_]\w*)\s*\(");
             if (goMethod.Success)
             {
                 name = $"{goMethod.Groups[1].Value}.{goMethod.Groups[2].Value}";
@@ -324,7 +546,7 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 return true;
             }
 
-            var goType = Regex.Match(collapsed, @"^type\s+([A-Za-z_]\w*)\s+(struct|interface)\b");
+            var goType = Regex.Match(collapsed, @"^type\s+([A-Za-z_]\w*)(?:\[[^\]]*\])?\s+(struct|interface)\b");
             if (goType.Success)
             {
                 name = goType.Groups[1].Value;
@@ -334,7 +556,149 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             return false;
         }
 
-        // Class container
+        // Kotlin
+        if (string.Equals(language, "Kotlin", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Regex.IsMatch(collapsed, @"^(?:private\s+|internal\s+|public\s+)?companion\s+object\b"))
+            {
+                isTransparent = true;
+                return true;
+            }
+
+            var objMatch = Regex.Match(collapsed, @"\bobject\s+([A-Za-z_]\w*)\b");
+            if (objMatch.Success)
+            {
+                name = objMatch.Groups[1].Value;
+                kind = BlockKind.Class;
+                isContainer = true;
+                return true;
+            }
+
+            var ktEnum = Regex.Match(collapsed, @"\benum\s+class\s+([A-Za-z_]\w*)\b");
+            if (ktEnum.Success)
+            {
+                name = ktEnum.Groups[1].Value;
+                kind = BlockKind.Enum;
+                return true;
+            }
+
+            var ktIface = Regex.Match(collapsed, @"\binterface\s+([A-Za-z_]\w*)\b");
+            if (ktIface.Success)
+            {
+                name = ktIface.Groups[1].Value;
+                kind = BlockKind.Interface;
+                return true;
+            }
+
+            var ktClass = Regex.Match(collapsed, @"\bclass\s+([A-Za-z_]\w*)\b");
+            if (ktClass.Success)
+            {
+                name = ktClass.Groups[1].Value;
+                kind = BlockKind.Class;
+                isContainer = true;
+                return true;
+            }
+
+            var ktFun = Regex.Match(collapsed, @"\bfun\s+(?:<[^>]*>\s*)?(?:([A-Za-z_]\w*)(?:<[^>]*>)?\.)?([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(");
+            if (ktFun.Success)
+            {
+                name = !string.IsNullOrEmpty(ktFun.Groups[1].Value)
+                    ? $"{ktFun.Groups[1].Value}.{ktFun.Groups[2].Value}"
+                    : ktFun.Groups[2].Value;
+                kind = string.IsNullOrEmpty(classPrefix) ? BlockKind.Function : BlockKind.Method;
+                return true;
+            }
+            return false;
+        }
+
+        // Swift
+        if (string.Equals(language, "Swift", StringComparison.OrdinalIgnoreCase))
+        {
+            var extMatch = Regex.Match(collapsed, @"\bextension\s+([A-Za-z_]\w*)\b");
+            if (extMatch.Success)
+            {
+                name = extMatch.Groups[1].Value;
+                kind = BlockKind.Class;
+                isContainer = true;
+                return true;
+            }
+
+            var protoMatch = Regex.Match(collapsed, @"\bprotocol\s+([A-Za-z_]\w*)\b");
+            if (protoMatch.Success)
+            {
+                name = protoMatch.Groups[1].Value;
+                kind = BlockKind.Interface;
+                return true;
+            }
+
+            var swType = Regex.Match(collapsed, @"\b(struct|enum)\s+([A-Za-z_]\w*)\b");
+            if (swType.Success)
+            {
+                name = swType.Groups[2].Value;
+                kind = swType.Groups[1].Value == "struct" ? BlockKind.Struct : BlockKind.Enum;
+                return true;
+            }
+
+            var swClass = Regex.Match(collapsed, @"\bclass\s+([A-Za-z_]\w*)\b");
+            if (swClass.Success)
+            {
+                name = swClass.Groups[1].Value;
+                kind = BlockKind.Class;
+                isContainer = true;
+                return true;
+            }
+
+            var swInit = Regex.Match(collapsed, @"\binit\??\s*\(");
+            if (swInit.Success && !string.IsNullOrEmpty(classPrefix))
+            {
+                name = "init";
+                kind = BlockKind.Constructor;
+                return true;
+            }
+
+            var swFunc = Regex.Match(collapsed, @"\bfunc\s+([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(");
+            if (swFunc.Success)
+            {
+                name = swFunc.Groups[1].Value;
+                kind = string.IsNullOrEmpty(classPrefix) ? BlockKind.Function : BlockKind.Method;
+                return true;
+            }
+            return false;
+        }
+
+        // PHP
+        if (string.Equals(language, "PHP", StringComparison.OrdinalIgnoreCase))
+        {
+            var phpClassOrTrait = Regex.Match(collapsed, @"\b(class|trait)\s+([A-Za-z_]\w*)\b");
+            if (phpClassOrTrait.Success)
+            {
+                name = phpClassOrTrait.Groups[2].Value;
+                kind = BlockKind.Class;
+                isContainer = true;
+                return true;
+            }
+
+            var phpIface = Regex.Match(collapsed, @"\b(interface|enum)\s+([A-Za-z_]\w*)\b");
+            if (phpIface.Success)
+            {
+                name = phpIface.Groups[2].Value;
+                kind = phpIface.Groups[1].Value == "enum" ? BlockKind.Enum : BlockKind.Interface;
+                return true;
+            }
+
+            var phpFn = Regex.Match(collapsed, @"\bfunction\s+&?\s*([A-Za-z_]\w*)\s*\(");
+            if (phpFn.Success)
+            {
+                name = phpFn.Groups[1].Value;
+                kind = string.IsNullOrEmpty(classPrefix)
+                    ? BlockKind.Function
+                    : (name == "__construct" ? BlockKind.Constructor : BlockKind.Method);
+                return true;
+            }
+            return false;
+        }
+
+        // Class container (Java, JS, TS, C++)
         var classMatch = Regex.Match(collapsed, @"\bclass\s+([A-Za-z_]\w*)\b");
         if (classMatch.Success && !collapsed.Contains("=>", StringComparison.Ordinal))
         {
@@ -346,7 +710,7 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
 
         // Whole types: interface, enum, struct, record
         var typeMatch = Regex.Match(collapsed, @"\b(interface|enum|struct|record)\s+([A-Za-z_]\w*)\b");
-        if (typeMatch.Success && !Regex.IsMatch(collapsed, @"\)\s*$"))
+        if (typeMatch.Success && !Regex.IsMatch(collapsed, @"\)\s*(?:const|noexcept|override|final)*$"))
         {
             name = typeMatch.Groups[2].Value;
             kind = typeMatch.Groups[1].Value switch
@@ -359,11 +723,10 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             return true;
         }
 
-        // JS / TS specific
+        // JS / TS
         if (string.Equals(language, "JavaScript", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(language, "TypeScript", StringComparison.OrdinalIgnoreCase))
         {
-            // export default function (...) {
             if (Regex.IsMatch(collapsed, @"^export\s+default\s+(?:async\s+)?function\s*\*?\s*\("))
             {
                 name = "default";
@@ -371,8 +734,7 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 return true;
             }
 
-            // (export)? (default)? (async)? function name(...) {
-            var fnMatch = Regex.Match(collapsed, @"\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(");
+            var fnMatch = Regex.Match(collapsed, @"^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(");
             if (fnMatch.Success)
             {
                 name = fnMatch.Groups[1].Value;
@@ -380,7 +742,6 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 return true;
             }
 
-            // const/let/var name = (async)? (...) => { or = function(...) {
             var varFn = Regex.Match(collapsed, @"^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)");
             if (varFn.Success)
             {
@@ -389,10 +750,19 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 return true;
             }
 
-            // Class method inside classPrefix
             if (!string.IsNullOrEmpty(classPrefix))
             {
-                var methodMatch = Regex.Match(collapsed, @"^(?:(?:public|private|protected|static|async|override|readonly|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([^)]*\)(?:\s*:\s*.+)?$");
+                // Class arrow property: handle = () => {
+                var arrowProp = Regex.Match(collapsed, @"^(?:(?:public|private|protected|static|readonly)\s+)*([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)");
+                if (arrowProp.Success && !ControlKeywords.Contains(arrowProp.Groups[1].Value))
+                {
+                    name = arrowProp.Groups[1].Value;
+                    kind = BlockKind.Method;
+                    return true;
+                }
+
+                // Class method (supports params with nested braces/types)
+                var methodMatch = Regex.Match(collapsed, @"^(?:(?:public|private|protected|static|async|override|readonly|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([\s\S]*\)(?:\s*:\s*[\s\S]+)?$");
                 if (methodMatch.Success && !ControlKeywords.Contains(methodMatch.Groups[1].Value))
                 {
                     name = methodMatch.Groups[1].Value;
@@ -404,38 +774,8 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             return false;
         }
 
-        // PHP
-        if (string.Equals(language, "PHP", StringComparison.OrdinalIgnoreCase))
-        {
-            var phpFn = Regex.Match(collapsed, @"\bfunction\s+&?\s*([A-Za-z_]\w*)\s*\(");
-            if (phpFn.Success)
-            {
-                name = phpFn.Groups[1].Value;
-                kind = string.IsNullOrEmpty(classPrefix) ? BlockKind.Function : BlockKind.Method;
-                return true;
-            }
-            return false;
-        }
-
-        // Kotlin / Swift
-        if (string.Equals(language, "Kotlin", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(language, "Swift", StringComparison.OrdinalIgnoreCase))
-        {
-            var ksFn = Regex.Match(collapsed, @"\bfunc?\s+(?:<[^>]*>\s*)?(?:([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(");
-            if (ksFn.Success)
-            {
-                name = !string.IsNullOrEmpty(ksFn.Groups[1].Value)
-                    ? $"{ksFn.Groups[1].Value}.{ksFn.Groups[2].Value}"
-                    : ksFn.Groups[2].Value;
-                kind = string.IsNullOrEmpty(classPrefix) ? BlockKind.Function : BlockKind.Method;
-                return true;
-            }
-            return false;
-        }
-
         // Java / C / C++
-        // Match function/method signature ending in (...) [const|noexcept|override|throws ...|: init(...)]
-        var cLike = Regex.Match(collapsed, @"(?:([A-Za-z_]\w*)::)?([A-Za-z_~]\w*)\s*\([^;{}]*\)\s*(?:const|noexcept|override|final|throws\s+[\w.,\s]+|:\s*[^;{]+)*$");
+        var cLike = Regex.Match(collapsed, @"(?:([A-Za-z_]\w*)(?:<[^>]*>)?::)?([A-Za-z_~]\w*)\s*\([\s\S]*\)\s*(?:(?:\s*(?:const|noexcept|override|final|throws\s+[\w.,\s]+))|(?:\s*:\s*[^;{]+))*$");
         if (cLike.Success)
         {
             var qualifiedClass = cLike.Groups[1].Value;
@@ -443,10 +783,10 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             if (ControlKeywords.Contains(fnName))
                 return false;
 
-            // Avoid matching bare control statements like "if (x)" or "return foo()"
             var beforeMatch = collapsed[..cLike.Index].Trim();
             if (beforeMatch.EndsWith("return", StringComparison.Ordinal) ||
-                beforeMatch.EndsWith("=", StringComparison.Ordinal))
+                beforeMatch.EndsWith("=", StringComparison.Ordinal) ||
+                beforeMatch.Contains("new ", StringComparison.Ordinal))
                 return false;
 
             if (!string.IsNullOrEmpty(qualifiedClass))
@@ -465,17 +805,6 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         }
 
         return false;
-    }
-
-    private static void ExtractPython(
-        string source,
-        string masked,
-        List<ExtractedBlock> blocks,
-        Dictionary<string, int> symbolCounts)
-    {
-        var rawLines = source.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var maskedLines = masked.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        ExtractPythonRange(rawLines, maskedLines, 0, rawLines.Length, classPrefix: string.Empty, blocks, symbolCounts);
     }
 
     private static void ExtractPythonRange(
@@ -504,33 +833,32 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
 
             // Include contiguous @decorators immediately above
             var blockStart = i;
-            while (blockStart > startLine && maskedLines[blockStart - 1].TrimStart().StartsWith("@", StringComparison.Ordinal) &&
+            while (blockStart > startLine &&
+                   maskedLines[blockStart - 1].TrimStart().StartsWith("@", StringComparison.Ordinal) &&
                    GetIndent(rawLines[blockStart - 1]) == declIndent)
             {
                 blockStart--;
             }
 
-            // Find end of block by indentation
+            // Find end of block using MASKED lines (so column-0 lines inside triple-quoted strings don't truncate!)
             var j = i + 1;
             while (j < endLine)
             {
-                if (rawLines[j].Trim().Length > 0 && maskedLines[j].Trim().Length > 0)
-                {
-                    if (GetIndent(rawLines[j]) <= declIndent)
-                        break;
-                }
-                else if (rawLines[j].Trim().Length > 0 && GetIndent(rawLines[j]) <= declIndent && !rawLines[j].TrimStart().StartsWith("#", StringComparison.Ordinal))
-                {
-                    // Triple-quoted docstring or string inside body vs top-level statement
-                    if (j > i + 1 && GetIndent(rawLines[j]) == 0 && declIndent == 0)
-                        break;
-                }
+                if (maskedLines[j].Trim().Length > 0 && GetIndent(maskedLines[j]) <= declIndent)
+                    break;
                 j++;
             }
 
+            // Trim trailing blank lines and trailing # comment lines that belong to the NEXT block
             var blockEnd = j;
-            while (blockEnd > i + 1 && rawLines[blockEnd - 1].Trim().Length == 0)
-                blockEnd--;
+            while (blockEnd > i + 1)
+            {
+                var rawTrim = rawLines[blockEnd - 1].Trim();
+                if (rawTrim.Length == 0 || rawTrim.StartsWith("#", StringComparison.Ordinal))
+                    blockEnd--;
+                else
+                    break;
+            }
 
             if (isClass.Success)
             {
@@ -561,8 +889,12 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
 
     private static string ExtractPythonComment(string[] rawLines, int blockStart, int defLine, int blockEnd)
     {
-        // 1. Check docstring right after def/class header
-        var bodyLine = defLine + 1;
+        // Advance past multiline signature closing "):"
+        var sigEnd = defLine;
+        while (sigEnd < blockEnd && !rawLines[sigEnd].TrimEnd().EndsWith(":", StringComparison.Ordinal))
+            sigEnd++;
+
+        var bodyLine = sigEnd + 1;
         while (bodyLine < blockEnd && rawLines[bodyLine].Trim().Length == 0)
             bodyLine++;
 
@@ -595,28 +927,15 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             }
         }
 
-        // 2. Fallback: contiguous # comments above blockStart
-        var comments = new List<string>();
-        for (var k = blockStart - 1; k >= 0; k--)
-        {
-            var t = rawLines[k].Trim();
-            if (t.StartsWith("#", StringComparison.Ordinal))
-                comments.Add(t[1..].Trim());
-            else
-                break;
-        }
-        comments.Reverse();
-        return string.Join('\n', comments).Trim();
+        return ExtractHashCommentAbove(rawLines, blockStart);
     }
 
     private static bool ExtractRuby(
-        string source,
-        string masked,
+        string[] rawLines,
+        string[] maskedLines,
         List<ExtractedBlock> blocks,
         Dictionary<string, int> symbolCounts)
     {
-        var rawLines = source.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var maskedLines = masked.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         var stack = new Stack<(string Kind, string Name, int StartLine, int BlocksBefore)>();
         var hasErrors = false;
 
@@ -625,6 +944,13 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             var line = maskedLines[i].Trim();
             if (line.Length == 0) continue;
 
+            // class << self (singleton class — transparent container)
+            if (Regex.IsMatch(line, @"^class\s*<<\s*\S+"))
+            {
+                stack.Push(("singleton", string.Empty, i, blocks.Count));
+                continue;
+            }
+
             var classMatch = Regex.Match(line, @"^(?:class|module)\s+([A-Za-z_][\w:]*)");
             if (classMatch.Success)
             {
@@ -632,9 +958,14 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 continue;
             }
 
-            var defMatch = Regex.Match(line, @"^def\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)");
+            // def / private def / protected def / public def
+            var defMatch = Regex.Match(line, @"^(?:(?:private|protected|public)\s+)?def\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)");
             if (defMatch.Success)
             {
+                // Endless method: def foo(x) = expr (no matching 'end')
+                if (Regex.IsMatch(line, @"\)\s*=(?!=)") || Regex.IsMatch(line, @"^def\s+(?:self\.)?[A-Za-z_]\w*[!?]?\s*=(?!=)"))
+                    continue;
+
                 stack.Push(("def", defMatch.Groups[1].Value, i, blocks.Count));
                 continue;
             }
@@ -680,20 +1011,17 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
     }
 
     private static void ExtractSql(
-        string source,
-        string masked,
+        string[] rawLines,
+        string[] maskedLines,
         List<ExtractedBlock> blocks,
         Dictionary<string, int> symbolCounts)
     {
-        var rawLines = source.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var maskedLines = masked.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-
         var i = 0;
         while (i < maskedLines.Length)
         {
             var match = Regex.Match(
                 maskedLines[i].Trim(),
-                @"^CREATE\s+(?:OR\s+ALTER\s+)?(PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|TABLE)\s+(?:\[?[\w]+\]?\.)?\[?([A-Za-z_][\w]*)\]?",
+                @"^CREATE\s+(?:OR\s+(?:ALTER|REPLACE)\s+)?(PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|TABLE)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\[?[\w]+\]?\.)?\[?([A-Za-z_][\w]*)\]?",
                 RegexOptions.IgnoreCase);
             if (!match.Success)
             {
@@ -705,15 +1033,49 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             var name = match.Groups[2].Value;
             var kind = objType == "FUNCTION" ? BlockKind.Function : BlockKind.Procedure;
             var start = i;
-            var j = i + 1;
+            var j = i;
+            var parenDepth = 0;
+            var beginDepth = 0;
+            var inDollarQuote = false;
+            var foundEnd = false;
 
             while (j < maskedLines.Length)
             {
-                var t = maskedLines[j].Trim();
-                if (Regex.IsMatch(t, @"^GO\b", RegexOptions.IgnoreCase))
+                var line = maskedLines[j].Trim();
+                if (j > start && Regex.IsMatch(line, @"^GO\b", RegexOptions.IgnoreCase))
+                {
                     break;
-                if (Regex.IsMatch(t, @"^CREATE\s+(?:OR\s+ALTER\s+)?(PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|TABLE)\b", RegexOptions.IgnoreCase))
+                }
+                if (j > start && beginDepth == 0 && !inDollarQuote &&
+                    Regex.IsMatch(line, @"^CREATE\s+(?:OR\s+(?:ALTER|REPLACE)\s+)?(PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|TABLE)\b", RegexOptions.IgnoreCase))
+                {
                     break;
+                }
+
+                // Track $$ dollar-quoted body (PostgreSQL)
+                var dollarCount = Regex.Matches(line, @"\$\$").Count;
+                if (dollarCount % 2 == 1)
+                    inDollarQuote = !inDollarQuote;
+
+                foreach (var ch in line)
+                {
+                    if (ch == '(') parenDepth++;
+                    else if (ch == ')' && parenDepth > 0) parenDepth--;
+                }
+
+                if (Regex.IsMatch(line, @"\bBEGIN\b", RegexOptions.IgnoreCase))
+                    beginDepth++;
+                if (Regex.IsMatch(line, @"\bEND\b", RegexOptions.IgnoreCase) && beginDepth > 0)
+                    beginDepth--;
+
+                // Terminate at statement-ending ';' when not inside parens, BEGIN..END, or $$...$$
+                if (parenDepth == 0 && beginDepth == 0 && !inDollarQuote && line.EndsWith(";", StringComparison.Ordinal))
+                {
+                    j++;
+                    foundEnd = true;
+                    break;
+                }
+
                 j++;
             }
 
@@ -725,7 +1087,10 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             var comment = ExtractSqlCommentAbove(rawLines, start);
             AddBlock(name, kind, code, comment, start + 1, blocks, symbolCounts);
 
-            i = j < maskedLines.Length && Regex.IsMatch(maskedLines[j].Trim(), @"^GO\b", RegexOptions.IgnoreCase) ? j + 1 : j;
+            if (!foundEnd && j < maskedLines.Length && Regex.IsMatch(maskedLines[j].Trim(), @"^GO\b", RegexOptions.IgnoreCase))
+                i = j + 1;
+            else
+                i = j;
         }
     }
 
@@ -751,28 +1116,34 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
         blocks.Add(new ExtractedBlock(symbol, displayName, kind, dedented, comment, startLine));
     }
 
-    private static string ExtractPrecedingComment(string source, int[] lineStarts, int blockStartLine, string language)
+    private static string ExtractPrecedingComment(string[] lines, int blockStartLine, string language)
     {
-        var lines = source.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         var idx = blockStartLine - 2; // 0-based line immediately above blockStartLine
         if (idx < 0 || idx >= lines.Length)
             return string.Empty;
 
-        var isHash = string.Equals(language, "Bash", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(language, "PowerShell", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(language, "Ruby", StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(language, "PowerShell", StringComparison.OrdinalIgnoreCase))
+            return ExtractPowerShellCommentAbove(lines, idx);
 
-        if (isHash)
+        if (string.Equals(language, "Bash", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(language, "Ruby", StringComparison.OrdinalIgnoreCase))
             return ExtractHashCommentAbove(lines, blockStartLine - 1);
+
+        var isJsTs = string.Equals(language, "JavaScript", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(language, "TypeScript", StringComparison.OrdinalIgnoreCase);
 
         var result = new List<string>();
         var inBlock = false;
+        var isJsDoc = false;
 
         for (var k = idx; k >= 0; k--)
         {
             var t = lines[k].Trim();
             if (inBlock)
             {
+                if (t.StartsWith("/**", StringComparison.Ordinal))
+                    isJsDoc = true;
+
                 if (t.StartsWith("/*", StringComparison.Ordinal))
                 {
                     var cleaned = t.TrimStart('/', '*').Trim();
@@ -795,6 +1166,148 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
                 result.Add(t[2..].Trim());
                 continue;
             }
+            if (string.Equals(language, "PHP", StringComparison.OrdinalIgnoreCase) && t.StartsWith("#", StringComparison.Ordinal))
+            {
+                result.Add(t[1..].Trim());
+                continue;
+            }
+            if (t.EndsWith("*/", StringComparison.Ordinal))
+            {
+                if (t.StartsWith("/*", StringComparison.Ordinal))
+                {
+                    if (t.StartsWith("/**", StringComparison.Ordinal))
+                        isJsDoc = true;
+                    var single = t[2..^2].TrimStart('*').Trim();
+                    if (single.Length > 0) result.Add(single);
+                    break;
+                }
+                var tail = t[..^2].TrimStart('*').Trim();
+                if (tail.Length > 0) result.Add(tail);
+                inBlock = true;
+                continue;
+            }
+
+            break;
+        }
+
+        result.Reverse();
+        if (isJsTs && isJsDoc)
+            return FormatJsDoc(result);
+
+        return string.Join('\n', result).Trim();
+    }
+
+    private static string FormatJsDoc(List<string> lines)
+    {
+        var formatted = new List<string>();
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("@param", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(line, @"^@param\s+(?:\{[^}]*\}\s+)?([A-Za-z_$][\w$]*)(?:\s*[-:]?\s*(.*))?$", RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    var paramName = m.Groups[1].Value;
+                    var desc = m.Groups[2].Value.Trim();
+                    formatted.Add(desc.Length > 0 ? $"- {paramName}: {desc}" : $"- {paramName}");
+                }
+                continue;
+            }
+
+            if (line.StartsWith("@returns", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("@return", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(line, @"^@returns?\s+(?:\{[^}]*\}\s+)?(.*)$", RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    var desc = m.Groups[1].Value.Trim();
+                    if (desc.Length > 0)
+                        formatted.Add($"Döndürür: {desc}");
+                }
+                continue;
+            }
+
+            if (line.StartsWith("@", StringComparison.Ordinal))
+                continue;
+
+            formatted.Add(line);
+        }
+
+        return string.Join('\n', formatted).Trim();
+    }
+
+    private static string ExtractPowerShellCommentAbove(string[] lines, int idx)
+    {
+        var t0 = lines[idx].Trim();
+        if (t0.EndsWith("#>", StringComparison.Ordinal))
+        {
+            var result = new List<string>();
+            for (var k = idx; k >= 0; k--)
+            {
+                var t = lines[k].Trim();
+                if (t.StartsWith("<#", StringComparison.Ordinal))
+                {
+                    var inner = t[2..].Replace("#>", string.Empty).Trim();
+                    if (inner.Length > 0) result.Add(inner);
+                    break;
+                }
+                var cleaned = t.Replace("#>", string.Empty).Trim();
+                if (cleaned.Length > 0) result.Add(cleaned);
+            }
+            result.Reverse();
+            return string.Join('\n', result).Trim();
+        }
+
+        return ExtractHashCommentAbove(lines, idx + 1);
+    }
+
+    private static string ExtractHashCommentAbove(string[] lines, int startLineIndex)
+    {
+        var result = new List<string>();
+        for (var k = startLineIndex - 1; k >= 0; k--)
+        {
+            var t = lines[k].Trim();
+            if (t.StartsWith("#", StringComparison.Ordinal) &&
+                !t.StartsWith("#!", StringComparison.Ordinal) &&
+                !t.StartsWith("#Requires", StringComparison.OrdinalIgnoreCase))
+                result.Add(t[1..].Trim());
+            else
+                break;
+        }
+        result.Reverse();
+        return string.Join('\n', result).Trim();
+    }
+
+    private static string ExtractSqlCommentAbove(string[] lines, int startLineIndex)
+    {
+        var idx = startLineIndex - 1;
+        if (idx < 0 || idx >= lines.Length)
+            return string.Empty;
+
+        var result = new List<string>();
+        var inBlock = false;
+
+        for (var k = idx; k >= 0; k--)
+        {
+            var t = lines[k].Trim();
+            if (inBlock)
+            {
+                if (t.StartsWith("/*", StringComparison.Ordinal))
+                {
+                    var cleaned = t.TrimStart('/', '*').Trim();
+                    if (cleaned.Length > 0) result.Add(cleaned);
+                    break;
+                }
+                var body = t.TrimStart('*').Trim();
+                if (body.Length > 0) result.Add(body);
+                continue;
+            }
+
+            if (t.StartsWith("--", StringComparison.Ordinal))
+            {
+                result.Add(t[2..].Trim());
+                continue;
+            }
             if (t.EndsWith("*/", StringComparison.Ordinal))
             {
                 if (t.StartsWith("/*", StringComparison.Ordinal))
@@ -812,36 +1325,6 @@ public sealed class RuleBasedBlockExtractor : IBlockExtractor
             break;
         }
 
-        result.Reverse();
-        return string.Join('\n', result).Trim();
-    }
-
-    private static string ExtractHashCommentAbove(string[] lines, int startLineIndex)
-    {
-        var result = new List<string>();
-        for (var k = startLineIndex - 1; k >= 0; k--)
-        {
-            var t = lines[k].Trim();
-            if (t.StartsWith("#", StringComparison.Ordinal) && !t.StartsWith("#!", StringComparison.Ordinal))
-                result.Add(t[1..].Trim());
-            else
-                break;
-        }
-        result.Reverse();
-        return string.Join('\n', result).Trim();
-    }
-
-    private static string ExtractSqlCommentAbove(string[] lines, int startLineIndex)
-    {
-        var result = new List<string>();
-        for (var k = startLineIndex - 1; k >= 0; k--)
-        {
-            var t = lines[k].Trim();
-            if (t.StartsWith("--", StringComparison.Ordinal))
-                result.Add(t[2..].Trim());
-            else
-                break;
-        }
         result.Reverse();
         return string.Join('\n', result).Trim();
     }
