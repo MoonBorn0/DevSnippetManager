@@ -38,6 +38,8 @@ namespace DevSnippetManager.Data
                 entity.Property(e => e.Tags).HasMaxLength(200);
                 entity.Property(e => e.Folder).HasMaxLength(100);
                 entity.Ignore(e => e.CodePreview);
+                entity.Ignore(e => e.IsFromSource);
+                entity.HasIndex(e => new { e.SourceRoot, e.SourceFile, e.SourceSymbol });
             });
 
             modelBuilder.Entity<SnippetVersion>(entity =>

@@ -281,4 +281,122 @@ public class SnippetRepositoryTests : IDisposable
         Assert.Equal(2, all.Count);
         Assert.Empty(await repo.GetVersionsAsync(s1.Id));
     }
+
+    [Fact]
+    public async Task SchemaUpgrade_AddsSourceColumns()
+    {
+        var dbPath = Path.Combine(_tempDir, "legacy_source_upgrade.db");
+        await using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            await conn.OpenAsync();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE Snippets (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Title TEXT NOT NULL,
+                    Language TEXT NOT NULL,
+                    Code TEXT NOT NULL,
+                    Tags TEXT NOT NULL,
+                    Description TEXT NOT NULL,
+                    CreatedAt TEXT NOT NULL,
+                    UpdatedAt TEXT NOT NULL,
+                    IsFavorite INTEGER NOT NULL DEFAULT 0,
+                    UsageCount INTEGER NOT NULL DEFAULT 0,
+                    LastUsedAt TEXT NULL,
+                    Folder TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO Snippets (Title, Language, Code, Tags, Description, CreatedAt, UpdatedAt)
+                VALUES ('OldRow', 'C#', 'return 42;', '', '', '2025-01-01', '2025-01-01');
+                """;
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        var repo = CreateRepository("legacy_source_upgrade.db");
+        await repo.InitializeAsync();
+
+        await using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            await conn.OpenAsync();
+            await using var colCmd = conn.CreateCommand();
+            colCmd.CommandText = "PRAGMA table_info(Snippets);";
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await using (var reader = await colCmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync()) cols.Add(reader.GetString(1));
+            }
+
+            Assert.Contains("SourceRoot", cols);
+            Assert.Contains("SourceFile", cols);
+            Assert.Contains("SourceSymbol", cols);
+            Assert.Contains("SourceComment", cols);
+            Assert.Contains("IsSourceMissing", cols);
+            Assert.Contains("LastScannedAt", cols);
+            Assert.DoesNotContain("IsFromSource", cols);
+
+            await using var idxCmd = conn.CreateCommand();
+            idxCmd.CommandText = "PRAGMA index_list(Snippets);";
+            var indexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await using (var reader = await idxCmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync()) indexes.Add(reader.GetString(1));
+            }
+            Assert.Contains("IX_Snippets_SourceRoot_SourceFile_SourceSymbol", indexes);
+        }
+
+        var row = Assert.Single(await repo.GetAllAsync());
+        Assert.Equal(string.Empty, row.SourceRoot);
+        Assert.Equal(string.Empty, row.SourceFile);
+        Assert.Equal(string.Empty, row.SourceSymbol);
+        Assert.Equal(string.Empty, row.SourceComment);
+        Assert.False(row.IsSourceMissing);
+        Assert.Null(row.LastScannedAt);
+        Assert.False(row.IsFromSource);
+    }
+
+    [Fact]
+    public async Task SourceFields_RoundTripThroughSaveAndJson()
+    {
+        var repo = CreateRepository("source_roundtrip.db");
+        await repo.InitializeAsync();
+        await repo.ClearAsync();
+
+        var scannedAt = new DateTime(2026, 11, 21, 23, 30, 0);
+        var snippet = new Snippet
+        {
+            Title = "OrderService.Total",
+            Language = "C#",
+            Code = "public decimal Total() => 0m;",
+            Folder = "Shop",
+            SourceRoot = @"C:\Projects\Shop",
+            SourceFile = @"Services\OrderService.cs",
+            SourceSymbol = "Shop.Orders.OrderService.Total()",
+            SourceComment = "Toplam tutarı hesaplar.",
+            IsSourceMissing = true,
+            LastScannedAt = scannedAt
+        };
+        Assert.True(snippet.IsFromSource);
+
+        await repo.AddOrUpdateAsync(snippet);
+
+        var freshRepo = CreateRepository("source_roundtrip.db");
+        var loaded = Assert.Single(await freshRepo.GetAllAsync());
+        Assert.Equal(snippet.SourceRoot, loaded.SourceRoot);
+        Assert.Equal(snippet.SourceFile, loaded.SourceFile);
+        Assert.Equal(snippet.SourceSymbol, loaded.SourceSymbol);
+        Assert.Equal(snippet.SourceComment, loaded.SourceComment);
+        Assert.True(loaded.IsSourceMissing);
+        Assert.Equal(scannedAt, loaded.LastScannedAt);
+        Assert.True(loaded.IsFromSource);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(loaded);
+        Assert.DoesNotContain("IsFromSource", json);
+        var fromJson = System.Text.Json.JsonSerializer.Deserialize<Snippet>(json)!;
+        Assert.Equal(snippet.SourceRoot, fromJson.SourceRoot);
+        Assert.Equal(snippet.SourceFile, fromJson.SourceFile);
+        Assert.Equal(snippet.SourceSymbol, fromJson.SourceSymbol);
+        Assert.Equal(snippet.SourceComment, fromJson.SourceComment);
+        Assert.True(fromJson.IsSourceMissing);
+        Assert.Equal(scannedAt, fromJson.LastScannedAt);
+        Assert.True(fromJson.IsFromSource);
+    }
 }

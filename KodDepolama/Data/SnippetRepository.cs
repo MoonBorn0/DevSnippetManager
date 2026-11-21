@@ -65,7 +65,13 @@ namespace DevSnippetManager.Data
                 ["IsFavorite"] = "INTEGER NOT NULL DEFAULT 0",
                 ["UsageCount"] = "INTEGER NOT NULL DEFAULT 0",
                 ["LastUsedAt"] = "TEXT NULL",
-                ["Folder"] = "TEXT NOT NULL DEFAULT ''"
+                ["Folder"] = "TEXT NOT NULL DEFAULT ''",
+                ["SourceRoot"] = "TEXT NOT NULL DEFAULT ''",
+                ["SourceFile"] = "TEXT NOT NULL DEFAULT ''",
+                ["SourceSymbol"] = "TEXT NOT NULL DEFAULT ''",
+                ["SourceComment"] = "TEXT NOT NULL DEFAULT ''",
+                ["IsSourceMissing"] = "INTEGER NOT NULL DEFAULT 0",
+                ["LastScannedAt"] = "TEXT NULL"
             };
 
             foreach (var missing in missingColumns)
@@ -77,6 +83,10 @@ namespace DevSnippetManager.Data
                 alter.CommandText = $"ALTER TABLE Snippets ADD COLUMN {missing.Key} {missing.Value};";
                 await alter.ExecuteNonQueryAsync();
             }
+
+            await using var createSourceIndex = connection.CreateCommand();
+            createSourceIndex.CommandText = @"CREATE INDEX IF NOT EXISTS ""IX_Snippets_SourceRoot_SourceFile_SourceSymbol"" ON ""Snippets"" (""SourceRoot"", ""SourceFile"", ""SourceSymbol"");";
+            await createSourceIndex.ExecuteNonQueryAsync();
         }
 
         private async Task EnsureSnippetVersionsTableAsync()

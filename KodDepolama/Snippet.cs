@@ -19,6 +19,16 @@ namespace KodDepolama
         public int UsageCount { get; set; }
         public DateTime? LastUsedAt { get; set; }
         public string Folder { get; set; } = string.Empty;
+        public string SourceRoot { get; set; } = string.Empty;
+        public string SourceFile { get; set; } = string.Empty;
+        public string SourceSymbol { get; set; } = string.Empty;
+        public string SourceComment { get; set; } = string.Empty;
+        public bool IsSourceMissing { get; set; }
+        public DateTime? LastScannedAt { get; set; }
+
+        [NotMapped]
+        [JsonIgnore]
+        public bool IsFromSource => !string.IsNullOrEmpty(SourceSymbol);
 
         [NotMapped]
         [JsonIgnore]
